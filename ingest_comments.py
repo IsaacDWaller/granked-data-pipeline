@@ -107,7 +107,7 @@ def extract_comment(comment):
             extract_comment(reply)
 
 
-connection = sqlite3.connect("granked.db")
+connection = sqlite3.connect("database\\granked.db")
 cursor = connection.cursor()
 
 cursor.execute(
@@ -138,7 +138,8 @@ links_to_ingest = cursor.execute(
         score >= 24 AND
         num_comments >= 16 AND
         language = "en" AND
-        ingested_at IS NULL
+        inference_model IS NULL AND
+        inferred_at_utc IS NULL
     """,
 ).fetchall()
 
@@ -159,22 +160,18 @@ for link in links_to_ingest:
             print(
                 f"Link request failed url={response.url} status_code={status_code} time={time.time()}"
             )
+
             sleep(1, 2)
             continue
 
-        for comment in response[1]["data"]["children"]:
+        print(
+            f"Link request succeeded url={response.url} status_code={status_code} time={time.time()}"
+        )
+
+        for comment in response.json()[1]["data"]["children"]:
             extract_comment(comment)
 
-# comments_to_infer = cursor.execute(
-#     """
-#     SELECT id
-#     FROM comment
-#     WHERE
-#         score >= 4 AND
-#         body NOT IN ('[deleted]', '[removed]') AND
-#         LENGTH(body) >= 24 AND
-#         language = 'en'
-#     """
-# ).fetchall()
+        sleep(1, 2)
+        break
 
 connection.close()
