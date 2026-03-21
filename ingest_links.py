@@ -5,7 +5,7 @@ import requests
 
 from utilities import detect_language, sleep
 
-connection = sqlite3.connect("granked.db")
+connection = sqlite3.connect("database\\granked.db")
 cursor = connection.cursor()
 
 cursor.execute(
@@ -43,8 +43,13 @@ for query in ["best mechanical keyboard"]:
             print(
                 f"Search request failed url={response.url} status_code={status_code} time={time.time()}"
             )
+
             sleep(2, 4)
             continue
+
+        print(
+            f"Search request succeeded url={response.url} status_code={status_code} time={time.time()}"
+        )
 
         for link in response.json()["data"]["children"]:
             if link["kind"] != "t3":
