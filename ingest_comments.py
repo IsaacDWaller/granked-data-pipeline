@@ -57,8 +57,19 @@ def extract_comment(comment):
     if existing_comment is None:
         cursor.execute(
             """
-            INSERT INTO comment (id, total_awards_received, created_utc, parent_id, score, body, link_id, depth, language)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO comment (
+                id,
+                total_awards_received,
+                created_utc,
+                parent_id,
+                score,
+                body,
+                link_id,
+                depth,
+                language,
+                ingestion_extracted_at_utc
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 id,
@@ -70,6 +81,7 @@ def extract_comment(comment):
                 link_id[3:],
                 depth,
                 detect_language(body),
+                time.time(),
             ),
         )
 
@@ -89,13 +101,23 @@ def extract_comment(comment):
             cursor.execute(
                 """
                 UPDATE comment
-                SET total_awards_received = ?, score = ?, body = ?, inference_model = NULL, inferred_at_utc = NULL
+                SET
+                    total_awards_received = ?,
+                    score = ?,
+                    body = ?,
+                    ingestion_extracted_at_utc = ?,
+                    inference_triage_model = NULL,
+                    adds_information = NULL,
+                    insight_score = NULL,
+                    summary = NULL,
+                    inference_triaged_at_utc = NULL
                 WHERE id = ?
                 """,
                 (
                     total_awards_received,
                     score,
                     body,
+                    time.time(),
                     id,
                 ),
             )
@@ -109,6 +131,7 @@ def extract_comment(comment):
 
 connection = sqlite3.connect("database\\granked.db")
 cursor = connection.cursor()
+cursor.execute("DROP TABLE IF EXISTS comment")
 
 cursor.execute(
     """
@@ -122,8 +145,12 @@ cursor.execute(
         link_id TEXT NOT NULL,
         depth INTEGER NOT NULL,
         language TEXT,
-        inference_model TEXT,
-        inferred_at_utc REAL,
+        ingestion_extracted_at_utc REAL NOT NULL,
+        inference_triage_model TEXT,
+        adds_information INTEGER,
+        insight_score INTEGER,
+        summary TEXT,
+        inference_triaged_at_utc REAL,
         FOREIGN KEY (link_id) REFERENCES link(id)
     ) STRICT
     """
@@ -138,8 +165,8 @@ links_to_ingest = cursor.execute(
         score >= 24 AND
         num_comments >= 16 AND
         language = "en" AND
-        inference_model IS NULL AND
-        inferred_at_utc IS NULL
+        inference_triage_model IS NULL AND
+        inference_triaged_at_utc IS NULL
     """,
 ).fetchall()
 
