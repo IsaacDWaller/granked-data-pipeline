@@ -67,7 +67,7 @@ def extract_comment(comment):
                 link_id,
                 depth,
                 language,
-                ingestion_extracted_at_utc
+                extracted_at_utc
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -105,12 +105,12 @@ def extract_comment(comment):
                     total_awards_received = ?,
                     score = ?,
                     body = ?,
-                    ingestion_extracted_at_utc = ?,
-                    inference_triage_model = NULL,
+                    extracted_at_utc = ?,
+                    triage_model = NULL,
                     adds_information = NULL,
                     insight_score = NULL,
                     summary = NULL,
-                    inference_triaged_at_utc = NULL
+                    triaged_at_utc = NULL
                 WHERE id = ?
                 """,
                 (
@@ -145,12 +145,12 @@ cursor.execute(
         link_id TEXT NOT NULL,
         depth INTEGER NOT NULL,
         language TEXT,
-        ingestion_extracted_at_utc REAL NOT NULL,
-        inference_triage_model TEXT,
+        extracted_at_utc REAL NOT NULL,
+        triage_model TEXT,
         adds_information INTEGER,
         insight_score INTEGER,
         summary TEXT,
-        inference_triaged_at_utc REAL,
+        triaged_at_utc REAL,
         FOREIGN KEY (link_id) REFERENCES link(id)
     ) STRICT
     """
@@ -165,8 +165,8 @@ links_to_ingest = cursor.execute(
         score >= 24 AND
         num_comments >= 16 AND
         language = "en" AND
-        inference_triage_model IS NULL AND
-        inference_triaged_at_utc IS NULL
+        triage_model IS NULL AND
+        triaged_at_utc IS NULL
     """,
 ).fetchall()
 
