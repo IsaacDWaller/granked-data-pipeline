@@ -21,8 +21,9 @@ cursor.execute(
         num_comments INTEGER NOT NULL,
         created_utc INTEGER NOT NULL,
         language TEXT,
-        inference_model TEXT,
-        inferred_at_utc REAL
+        extracted_at_utc REAL NOT NULL,
+        triage_model TEXT,
+        triaged_at_utc REAL
     ) STRICT
     """
 )
@@ -82,7 +83,13 @@ for query in ["best mechanical keyboard"]:
 
             existing_link = cursor.execute(
                 """
-                SELECT selftext, title, upvote_ratio, total_awards_received, score, num_comments
+                SELECT
+                    selftext,
+                    title,
+                    upvote_ratio,
+                    total_awards_received,
+                    score,
+                    num_comments
                 FROM link
                 WHERE id = ?
                 """,
@@ -92,8 +99,19 @@ for query in ["best mechanical keyboard"]:
             if existing_link is None:
                 cursor.execute(
                     """
-                    INSERT INTO link (id, subreddit, selftext, title, upvote_ratio, total_awards_received, score, num_comments, created_utc, language)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO link (
+                        id,
+                        subreddit,
+                        selftext,
+                        title,
+                        upvote_ratio,
+                        total_awards_received,
+                        score,
+                        num_comments,
+                        created_utc,
+                        language,
+                        extracted_at_utc)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         id,
@@ -106,6 +124,7 @@ for query in ["best mechanical keyboard"]:
                         num_comments,
                         created_utc,
                         detect_language(f"{title} {selftext}"),
+                        time.time(),
                     ),
                 )
 
@@ -132,7 +151,16 @@ for query in ["best mechanical keyboard"]:
                 cursor.execute(
                     """
                     UPDATE link
-                    SET selftext = ?, title = ?, upvote_ratio = ?, total_awards_received = ?, score = ?, num_comments = ?, inference_model = NULL, inferred_at_utc = NULL
+                    SET
+                        selftext = ?,
+                        title = ?,
+                        upvote_ratio = ?,
+                        total_awards_received = ?,
+                        score = ?,
+                        num_comments = ?,
+                        extracted_at_utc = ?,
+                        triage_model = NULL,
+                        triaged_at_utc = NULL
                     WHERE id = ?
                     """,
                     (
@@ -142,6 +170,7 @@ for query in ["best mechanical keyboard"]:
                         total_awards_received,
                         score,
                         num_comments,
+                        time.time(),
                         id,
                     ),
                 )
