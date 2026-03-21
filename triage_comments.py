@@ -32,8 +32,16 @@ while True:
             score >= 4 AND
             LENGTH(body) >= 24 AND
             language = "en" AND
-            (inference_triage_model IS NULL OR inference_triage_model != ?) AND
-            inference_triaged_at_utc IS NULL
+            (
+                triage_model != ? OR
+                (
+                    triage_model IS NULL AND
+                    adds_information IS NULL AND
+                    insight_score IS NULL AND
+                    summary IS NULL AND
+                    triaged_at_utc IS NULL
+                )
+            )
         LIMIT 8
         """,
         (model,),
@@ -100,11 +108,11 @@ Rules:
             """
             UPDATE comment
             SET
-                inference_triage_model = ?,
+                triage_model = ?,
                 adds_information = ?,
                 insight_score = ?,
                 summary = ?,
-                inference_triaged_at_utc = ?
+                triaged_at_utc = ?
             WHERE id = ?
             """,
             (
