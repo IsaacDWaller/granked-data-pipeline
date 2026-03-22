@@ -1,11 +1,10 @@
 import json
 import os
-import sqlite3
 import time
 
-from utilities import load_model
+from utilities import create_connection, load_model
 
-connection = sqlite3.connect("database\\granked.db")
+connection = create_connection("database\\granked.db")
 cursor = connection.cursor()
 
 llm = load_model(
@@ -19,20 +18,7 @@ while True:
         """
         SELECT id, body
         FROM comment
-        WHERE
-            score >= 4 AND
-            LENGTH(body) >= 24 AND
-            language = "en" AND
-            (
-                triage_model != ? OR
-                (
-                    triage_model IS NULL AND
-                    adds_information IS NULL AND
-                    insight_score IS NULL AND
-                    summary IS NULL AND
-                    triaged_at_utc IS NULL
-                )
-            )
+        WHERE triaged_at_utc IS NULL OR triage_model != ?
         LIMIT 16
         """,
         (model,),
@@ -40,11 +26,6 @@ while True:
 
     if not comments_to_triage:
         break
-
-    comments_text = ""
-    for comment in comments_to_triage:
-        (id, body) = comment
-        comments_text += f"""\n\n<COMMENT id="{id}">\n{body}\n</COMMENT>"""
 
     system_prompt = """
 You are an assistant that analyses Reddit comments.
@@ -76,6 +57,12 @@ Rules:
 - Do not omit any comments
 - Do not include any text outside JSON
 """
+
+    comments_text = ""
+
+    for comment in comments_to_triage:
+        (id, body) = comment
+        comments_text += f"""\n\n<COMMENT id="{id}">\n{body}\n</COMMENT>"""
 
     response = llm.create_chat_completion(
         messages=[
@@ -117,3 +104,5 @@ Rules:
         )
 
         connection.commit()
+
+connection.close()
