@@ -5,6 +5,11 @@ import requests
 
 from utilities import detect_language, sleep
 
+MINIMUM_UPVOTE_RATIO = 0.8
+MINIMUM_SCORE = 24
+MINIMUM_NUM_COMMENTS = 16
+REQUIRED_LANGUAGE = "en"
+
 connection = sqlite3.connect("database\\granked.db")
 cursor = connection.cursor()
 
@@ -81,6 +86,8 @@ for query in ["best mechanical keyboard"]:
                 ]
             ]
 
+            language = detect_language(f"{title} {selftext}")
+
             existing_link = cursor.execute(
                 """
                 SELECT
@@ -96,7 +103,89 @@ for query in ["best mechanical keyboard"]:
                 (id,),
             ).fetchone()
 
-            if existing_link is None:
+            if existing_link:
+                if (
+                    upvote_ratio < MINIMUM_UPVOTE_RATIO
+                    or score < MINIMUM_SCORE
+                    or num_comments < MINIMUM_NUM_COMMENTS
+                    or language != REQUIRED_LANGUAGE
+                ):
+                    cursor.execute(
+                        """
+                        DELETE FROM link
+                        WHERE id = ?
+                        """,
+                        (id,),
+                    )
+
+                    connection.commit()
+                    continue
+
+                (
+                    existing_selftext,
+                    existing_title,
+                    existing_upvote_ratio,
+                    existing_total_awards_received,
+                    existing_score,
+                    existing_num_comments,
+                ) = existing_link
+
+                if (
+                    existing_upvote_ratio != upvote_ratio
+                    or existing_total_awards_received != total_awards_received
+                    or existing_score != score
+                    or existing_num_comments != num_comments
+                ):
+                    cursor.execute(
+                        """
+                        UPDATE link
+                        SET
+                            upvote_ratio = ?,
+                            total_awards_received = ?,
+                            score = ?,
+                            num_comments = ?,
+                            ingested_at_utc = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            upvote_ratio,
+                            total_awards_received,
+                            score,
+                            num_comments,
+                            time.time(),
+                            id,
+                        ),
+                    )
+
+                    connection.commit()
+
+                if existing_selftext != selftext or existing_title != title:
+                    cursor.execute(
+                        """
+                        UPDATE link
+                        SET
+                            selftext = ?,
+                            title = ?,
+                            ingested_at_utc = ?,
+                            triaged_at_utc = NULL
+                        WHERE id = ?
+                        """,
+                        (
+                            selftext,
+                            title,
+                            time.time(),
+                            id,
+                        ),
+                    )
+
+                    connection.commit()
+            elif (
+                not existing_link
+                and upvote_ratio >= MINIMUM_UPVOTE_RATIO
+                and score >= MINIMUM_SCORE
+                and num_comments >= MINIMUM_NUM_COMMENTS
+                and language == REQUIRED_LANGUAGE
+            ):
                 cursor.execute(
                     """
                     INSERT INTO link (
@@ -124,55 +213,8 @@ for query in ["best mechanical keyboard"]:
                         score,
                         num_comments,
                         created_utc,
-                        detect_language(f"{title} {selftext}"),
+                        language,
                         time.time(),
-                    ),
-                )
-
-                connection.commit()
-                continue
-
-            (
-                existing_selftext,
-                existing_title,
-                existing_upvote_ratio,
-                existing_total_awards_received,
-                existing_score,
-                existing_num_comments,
-            ) = existing_link
-
-            if (
-                existing_selftext != selftext
-                or existing_title != title
-                or existing_upvote_ratio != upvote_ratio
-                or existing_total_awards_received != total_awards_received
-                or existing_score != score
-                or existing_num_comments != num_comments
-            ):
-                cursor.execute(
-                    """
-                    UPDATE link
-                    SET
-                        selftext = ?,
-                        title = ?,
-                        upvote_ratio = ?,
-                        total_awards_received = ?,
-                        score = ?,
-                        num_comments = ?,
-                        ingested_at_utc = ?,
-                        triage_model = NULL,
-                        triaged_at_utc = NULL
-                    WHERE id = ?
-                    """,
-                    (
-                        selftext,
-                        title,
-                        upvote_ratio,
-                        total_awards_received,
-                        score,
-                        num_comments,
-                        time.time(),
-                        id,
                     ),
                 )
 
