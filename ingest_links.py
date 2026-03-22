@@ -1,17 +1,20 @@
-import sqlite3
+import logging
 import time
 
 import requests
 
-from utilities import detect_language, sleep
+from utilities import create_connection, detect_language, sleep
 
 MINIMUM_UPVOTE_RATIO = 0.8
 MINIMUM_SCORE = 24
 MINIMUM_NUM_COMMENTS = 16
 REQUIRED_LANGUAGE = "en"
 
-connection = sqlite3.connect("database\\granked.db")
+connection = create_connection("database\\granked.db")
 cursor = connection.cursor()
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(filename="ingest_links.log", level=logging.INFO)
 
 cursor.execute(
     """
@@ -46,14 +49,14 @@ for query in ["best mechanical keyboard"]:
         status_code = response.status_code
 
         if status_code != requests.codes.ok:
-            print(
+            logger.error(
                 f"Search request failed url={response.url} status_code={status_code} time={time.time()}"
             )
 
             sleep(2, 4)
             continue
 
-        print(
+        logger.info(
             f"Search request succeeded url={response.url} status_code={status_code} time={time.time()}"
         )
 
@@ -86,7 +89,7 @@ for query in ["best mechanical keyboard"]:
                 ]
             ]
 
-            language = detect_language(f"{title} {selftext}")
+            language = detect_language(logger, f"{title} {selftext}")
 
             existing_link = cursor.execute(
                 """
@@ -111,10 +114,7 @@ for query in ["best mechanical keyboard"]:
                     or language != REQUIRED_LANGUAGE
                 ):
                     cursor.execute(
-                        """
-                        DELETE FROM link
-                        WHERE id = ?
-                        """,
+                        "DELETE FROM link WHERE id = ?",
                         (id,),
                     )
 
