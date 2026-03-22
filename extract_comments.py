@@ -1,11 +1,10 @@
 import json
 import os
-import sqlite3
 import time
 
-from utilities import load_model
+from utilities import create_connection, load_model
 
-connection = sqlite3.connect("database\\granked.db")
+connection = create_connection("database\\granked.db")
 cursor = connection.cursor()
 
 llm = load_model(
@@ -20,31 +19,8 @@ while True:
         SELECT id, body
         FROM comment
         WHERE
-            score >= 4 AND
-            LENGTH(body) >= 24 AND
-            language = "en" AND
-            triage_model IS NOT NULL AND
-            adds_information IS NOT NULL AND
-            insight_score IS NOT NULL AND
-            summary IS NOT NULL AND
             triaged_at_utc IS NOT NULL AND
-            (
-                extraction_model != ? OR
-                (
-                    extraction_model IS NULL AND
-                    brand IS NULL AND
-                    model IS NULL AND
-                    category IS NULL AND
-                    context IS NULL AND
-                    attributes IS NULL AND
-                    price IS NULL AND
-                    currency IS NULL AND
-                    sentiment IS NULL AND
-                    positives IS NULL AND
-                    negatives IS NULL AND
-                    miscellaneous IS NULL
-                )
-            )
+            (extracted_at_utc IS NULL OR extraction_model != ?)
         LIMIT 16
         """,
         (llm_model,),
@@ -52,11 +28,6 @@ while True:
 
     if not comments_to_extract:
         break
-
-    comments_text = ""
-    for comment in comments_to_extract:
-        (id, body) = comment
-        comments_text += f"""\n\n<COMMENT id="{id}">\n{body}\n</COMMENT>"""
 
     system_prompt = """
 You are an assistant that extracts structured data from Reddit comments.
@@ -113,6 +84,12 @@ Rules:
 - For lists, use an array in JSON
 - For attributes, use an object in JSON
 """
+
+    comments_text = ""
+
+    for comment in comments_to_extract:
+        (id, body) = comment
+        comments_text += f"""\n\n<COMMENT id="{id}">\n{body}\n</COMMENT>"""
 
     response = llm.create_chat_completion(
         messages=[
@@ -196,3 +173,5 @@ Rules:
         )
 
         connection.commit()
+
+connection.close()
