@@ -5,11 +5,6 @@ import requests
 
 from utilities import detect_language, sleep
 
-TOTAL_AWARDS_RECEIVED = []
-SCORES = []
-BODY_LENGTHS = []
-DEPTHS = []
-
 
 def extract_comment(comment):
     if comment["kind"] != "t1":
@@ -40,11 +35,6 @@ def extract_comment(comment):
         ]
     ]
 
-    TOTAL_AWARDS_RECEIVED.append(total_awards_received)
-    SCORES.append(score)
-    BODY_LENGTHS.append(len(body))
-    DEPTHS.append(depth)
-
     existing_comment = cursor.execute(
         """
         SELECT total_awards_received, score, body
@@ -67,7 +57,7 @@ def extract_comment(comment):
                 link_id,
                 depth,
                 language,
-                extracted_at_utc
+                ingested_at_utc
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -105,12 +95,24 @@ def extract_comment(comment):
                     total_awards_received = ?,
                     score = ?,
                     body = ?,
-                    extracted_at_utc = ?,
+                    ingested_at_utc = ?,
                     triage_model = NULL,
                     adds_information = NULL,
                     insight_score = NULL,
                     summary = NULL,
-                    triaged_at_utc = NULL
+                    triaged_at_utc = NULL,
+                    extraction_model = NULL,
+                    brand = NULL,
+                    model = NULL,
+                    category = NULL,
+                    context = NULL,
+                    attributes = NULL,
+                    price = NULL,
+                    currency = NULL,
+                    sentiment = NULL,
+                    positives = NULL,
+                    negatives = NULL,
+                    miscellaneous = NULL
                 WHERE id = ?
                 """,
                 (
@@ -131,7 +133,6 @@ def extract_comment(comment):
 
 connection = sqlite3.connect("database\\granked.db")
 cursor = connection.cursor()
-cursor.execute("DROP TABLE IF EXISTS comment")
 
 cursor.execute(
     """
@@ -145,12 +146,25 @@ cursor.execute(
         link_id TEXT NOT NULL,
         depth INTEGER NOT NULL,
         language TEXT,
-        extracted_at_utc REAL NOT NULL,
+        ingested_at_utc REAL NOT NULL,
         triage_model TEXT,
         adds_information INTEGER,
         insight_score INTEGER,
         summary TEXT,
         triaged_at_utc REAL,
+        extraction_model TEXT,
+        brand TEXT,
+        model TEXT,
+        category TEXT,
+        context TEXT,
+        attributes TEXT,
+        price REAL,
+        currency TEXT,
+        sentiment TEXT,
+        positives TEXT,
+        negatives TEXT,
+        miscellaneous TEXT,
+        extracted_at_utc REAL,
         FOREIGN KEY (link_id) REFERENCES link(id)
     ) STRICT
     """

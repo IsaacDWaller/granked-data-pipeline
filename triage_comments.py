@@ -3,22 +3,13 @@ import os
 import sqlite3
 import time
 
-from llama_cpp import Llama
+from utilities import load_model
 
 connection = sqlite3.connect("database\\granked.db")
 cursor = connection.cursor()
 
-llm = Llama(
-    model_path="C:\\Users\\isaac\\llm\\models\\Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf",
-    n_gpu_layers=-1,
-    n_ctx=8_192,
-    n_batch=1_024,
-    n_ubatch=1_024,
-    n_threads=12,
-    n_threads_batch=12,
-    flash_attn=True,
-    op_offload=True,
-    verbose=False,
+llm = load_model(
+    "C:\\Users\\isaac\\llm\\models\\Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"
 )
 
 model = os.path.basename(llm.model_path)
@@ -42,7 +33,7 @@ while True:
                     triaged_at_utc IS NULL
                 )
             )
-        LIMIT 8
+        LIMIT 16
         """,
         (model,),
     ).fetchall()
@@ -53,30 +44,30 @@ while True:
     comments_text = ""
     for comment in comments_to_triage:
         (id, body) = comment
-        comments_text += f'\n\n<COMMENT id="{id}">\n{body}\n</COMMENT>'
+        comments_text += f"""\n\n<COMMENT id="{id}">\n{body}\n</COMMENT>"""
 
     system_prompt = """
-You are analysing Reddit comments.
+You are an assistant that analyses Reddit comments.
 
 Return ONLY valid JSON.
 
 Output format:
 [
     {
-    "id": string,
-    "adds_information": 0 or 1,
-    "insight_score": integer (0-10),
-    "summary": string (one sentence)
+        "id": string,
+        "adds_information": integer (0/1),
+        "insight_score": integer (0-10),
+        "summary": string (one sentence)
     }
 ]
 
 Example:
 [
     {
-    "id": "abc123",
-    "adds_information": 1,
-    "insight_score": 7,
-    "summary": "Explains why TKL keyboards are preferred for space efficiency."
+        "id": "abc123",
+        "adds_information": 1,
+        "insight_score": 7,
+        "summary": "Explains why TKL keyboards are preferred for space efficiency."
     }
 ]
 
