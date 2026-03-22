@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 
@@ -12,6 +13,9 @@ llm = load_model(
 )
 
 model = os.path.basename(llm.model_path)
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(filename="triage_comments.log", level=logging.INFO)
 
 while True:
     comments_to_triage = cursor.execute(
@@ -104,5 +108,6 @@ Rules:
         )
 
         connection.commit()
+        logger.info(f"Triaged comment id={id}")
 
 connection.close()

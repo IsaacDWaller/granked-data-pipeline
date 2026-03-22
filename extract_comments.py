@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 
@@ -12,6 +13,9 @@ llm = load_model(
 )
 
 llm_model = os.path.basename(llm.model_path)
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(filename="extract_comments.log", level=logging.INFO)
 
 while True:
     comments_to_extract = cursor.execute(
@@ -173,5 +177,6 @@ Rules:
         )
 
         connection.commit()
+        logger.info(f"Extracted comment id={id}")
 
 connection.close()
