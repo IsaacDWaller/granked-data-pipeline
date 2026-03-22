@@ -21,7 +21,7 @@ cursor.execute(
         num_comments INTEGER NOT NULL,
         created_utc INTEGER NOT NULL,
         language TEXT,
-        extracted_at_utc REAL NOT NULL,
+        ingested_at_utc REAL NOT NULL,
         triage_model TEXT,
         triaged_at_utc REAL
     ) STRICT
@@ -110,7 +110,8 @@ for query in ["best mechanical keyboard"]:
                         num_comments,
                         created_utc,
                         language,
-                        extracted_at_utc)
+                        ingested_at_utc
+                    )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
@@ -158,7 +159,7 @@ for query in ["best mechanical keyboard"]:
                         total_awards_received = ?,
                         score = ?,
                         num_comments = ?,
-                        extracted_at_utc = ?,
+                        ingested_at_utc = ?,
                         triage_model = NULL,
                         triaged_at_utc = NULL
                     WHERE id = ?
