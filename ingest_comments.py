@@ -8,10 +8,6 @@ from dotenv import load_dotenv
 
 from utilities import create_connection, detect_language, sleep
 
-MINIMUM_SCORE = 4
-MINIMUM_BODY_LENGTH = 24
-REQUIRED_LANGUAGE = "en"
-
 load_dotenv()
 
 
@@ -56,19 +52,6 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
     ).fetchone()
 
     if existing_comment:
-        if (
-            score < MINIMUM_SCORE
-            or len(body) < MINIMUM_BODY_LENGTH
-            or language != REQUIRED_LANGUAGE
-        ):
-            cursor.execute(
-                "DELETE FROM comment WHERE id = ?",
-                (id,),
-            )
-
-            connection.commit()
-            return
-
         (existing_total_awards_received, existing_score, existing_body) = (
             existing_comment
         )
@@ -108,11 +91,7 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
             )
 
             connection.commit()
-    elif (
-        not existing_comment
-        and score >= MINIMUM_SCORE
-        and len(body) >= MINIMUM_BODY_LENGTH
-    ) and language == REQUIRED_LANGUAGE:
+    else:
         cursor.execute(
             """
             INSERT INTO comment (

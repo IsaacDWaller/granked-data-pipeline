@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 
 from utilities import create_connection, load_model
 
+MINIMUM_SCORE = 4
+MINIMUM_BODY_LENGTH = 24
+REQUIRED_LANGUAGE = "en"
+
 load_dotenv()
 
 connection = create_connection(os.getenv("DATABASE_PATH"))
@@ -24,10 +28,14 @@ while True:
         """
         SELECT id, body
         FROM comment
-        WHERE triaged_at_utc IS NULL OR triage_model != ?
+        WHERE 
+            score >= ? AND
+            LENGTH(body) >= ? AND
+            language = ? AND
+            (triaged_at_utc IS NULL OR triage_model != ?)
         LIMIT 16
         """,
-        (model,),
+        (MINIMUM_SCORE, MINIMUM_BODY_LENGTH, REQUIRED_LANGUAGE, model),
     ).fetchall()
 
     if not comments_to_triage:

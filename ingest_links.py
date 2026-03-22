@@ -118,6 +118,11 @@ for query in ["best mechanical keyboard"]:
                     or language != REQUIRED_LANGUAGE
                 ):
                     cursor.execute(
+                        "DELETE FROM comment WHERE link_id = ?",
+                        (id,),
+                    )
+
+                    cursor.execute(
                         "DELETE FROM link WHERE id = ?",
                         (id,),
                     )
