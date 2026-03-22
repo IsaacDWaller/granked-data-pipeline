@@ -1,15 +1,23 @@
+import logging
 import random
+import sqlite3
 import time
 
 from langdetect import LangDetectException, detect
 from llama_cpp import Llama
 
 
-def detect_language(text):
+def create_connection(database):
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+def detect_language(logger: logging.Logger, text):
     try:
         return detect(text)
     except LangDetectException:
-        print(f"Language detect failed text={text} time={time.time()}")
+        logger.error(f"Language detect failed text={text} time={time.time()}")
         return None
 
 
