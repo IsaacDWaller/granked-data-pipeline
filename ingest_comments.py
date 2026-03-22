@@ -1,12 +1,17 @@
+import logging
 import sqlite3
 import time
 
 import requests
 
-from utilities import detect_language, sleep
+from utilities import create_connection, detect_language, sleep
+
+MINIMUM_SCORE = 4
+MINIMUM_BODY_LENGTH = 24
+REQUIRED_LANGUAGE = "en"
 
 
-def extract_comment(comment):
+def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comment):
     if comment["kind"] != "t1":
         return
 
@@ -35,6 +40,8 @@ def extract_comment(comment):
         ]
     ]
 
+    language = detect_language(logger, body)
+
     existing_comment = cursor.execute(
         """
         SELECT total_awards_received, score, body
@@ -44,7 +51,64 @@ def extract_comment(comment):
         (id,),
     ).fetchone()
 
-    if existing_comment is None:
+    if existing_comment:
+        if (
+            score < MINIMUM_SCORE
+            or len(body) < MINIMUM_BODY_LENGTH
+            or language != REQUIRED_LANGUAGE
+        ):
+            cursor.execute(
+                "DELETE FROM comment WHERE id = ?",
+                (id,),
+            )
+
+            connection.commit()
+            return
+
+        (existing_total_awards_received, existing_score, existing_body) = (
+            existing_comment
+        )
+
+        if (
+            existing_total_awards_received != total_awards_received
+            or existing_score != score
+        ):
+            cursor.execute(
+                """
+                UPDATE comment
+                SET total_awards_received = ?, score = ?, ingested_at_utc = ?
+                WHERE id = ?
+                """,
+                (
+                    total_awards_received,
+                    score,
+                    time.time(),
+                    id,
+                ),
+            )
+
+            connection.commit()
+
+        if existing_body != body:
+            cursor.execute(
+                """
+                UPDATE comment
+                SET body = ?, ingested_at_utc = ?, triaged_at_utc = NULL
+                WHERE id = ?
+                """,
+                (
+                    body,
+                    time.time(),
+                    id,
+                ),
+            )
+
+            connection.commit()
+    elif (
+        not existing_comment
+        and score >= MINIMUM_SCORE
+        and len(body) >= MINIMUM_BODY_LENGTH
+    ) and language == REQUIRED_LANGUAGE:
         cursor.execute(
             """
             INSERT INTO comment (
@@ -70,69 +134,23 @@ def extract_comment(comment):
                 body,
                 link_id[3:],
                 depth,
-                detect_language(body),
+                language,
                 time.time(),
             ),
         )
 
         connection.commit()
-    else:
-        (
-            existing_total_awards_received,
-            existing_score,
-            existing_body,
-        ) = existing_comment
-
-        if (
-            existing_total_awards_received != total_awards_received
-            or existing_score != score
-            or existing_body != body
-        ):
-            cursor.execute(
-                """
-                UPDATE comment
-                SET
-                    total_awards_received = ?,
-                    score = ?,
-                    body = ?,
-                    ingested_at_utc = ?,
-                    triage_model = NULL,
-                    adds_information = NULL,
-                    insight_score = NULL,
-                    summary = NULL,
-                    triaged_at_utc = NULL,
-                    extraction_model = NULL,
-                    brand = NULL,
-                    model = NULL,
-                    category = NULL,
-                    context = NULL,
-                    attributes = NULL,
-                    price = NULL,
-                    currency = NULL,
-                    sentiment = NULL,
-                    positives = NULL,
-                    negatives = NULL,
-                    miscellaneous = NULL
-                WHERE id = ?
-                """,
-                (
-                    total_awards_received,
-                    score,
-                    body,
-                    time.time(),
-                    id,
-                ),
-            )
-
-            connection.commit()
 
     if replies != "":
         for reply in replies["data"]["children"]:
-            extract_comment(reply)
+            extract_comment(connection, cursor, reply)
 
 
-connection = sqlite3.connect("database\\granked.db")
+connection = create_connection("database\\granked.db")
 cursor = connection.cursor()
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(filename="ingest_comments.log", level=logging.INFO)
 
 cursor.execute(
     """
@@ -174,22 +192,16 @@ links_to_ingest = cursor.execute(
     """
     SELECT id, subreddit
     FROM link
-    WHERE
-        upvote_ratio >= 0.8 AND
-        score >= 24 AND
-        num_comments >= 16 AND
-        language = "en" AND
-        triage_model IS NULL AND
-        triaged_at_utc IS NULL
+    WHERE triaged_at_utc IS NULL
     """,
 ).fetchall()
 
 for link in links_to_ingest:
-    link_id, subreddit = link
+    id, subreddit = link
 
     while True:
         response = requests.get(
-            f"https://www.reddit.com/r/{subreddit}/comments/{link_id}/.json",
+            f"https://www.reddit.com/r/{subreddit}/comments/{id}/.json",
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
             },
@@ -198,19 +210,19 @@ for link in links_to_ingest:
         status_code = response.status_code
 
         if status_code != requests.codes.ok:
-            print(
+            logger.error(
                 f"Link request failed url={response.url} status_code={status_code} time={time.time()}"
             )
 
             sleep(1, 2)
             continue
 
-        print(
+        logger.info(
             f"Link request succeeded url={response.url} status_code={status_code} time={time.time()}"
         )
 
         for comment in response.json()[1]["data"]["children"]:
-            extract_comment(comment)
+            extract_comment(connection, cursor, comment)
 
         sleep(1, 2)
         break
