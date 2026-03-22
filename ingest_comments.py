@@ -1,14 +1,18 @@
 import logging
+import os
 import sqlite3
 import time
 
 import requests
+from dotenv import load_dotenv
 
 from utilities import create_connection, detect_language, sleep
 
 MINIMUM_SCORE = 4
 MINIMUM_BODY_LENGTH = 24
 REQUIRED_LANGUAGE = "en"
+
+load_dotenv()
 
 
 def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comment):
@@ -146,11 +150,11 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
             extract_comment(connection, cursor, reply)
 
 
-connection = create_connection("database\\granked.db")
+connection = create_connection(os.getenv("DATABASE_PATH"))
 cursor = connection.cursor()
 
-logger = logging.getLogger(__name__)
 logging.basicConfig(filename="ingest_comments.log", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 cursor.execute(
     """

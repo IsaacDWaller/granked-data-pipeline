@@ -1,20 +1,24 @@
 import logging
+import os
 import time
 
 import requests
+from dotenv import load_dotenv
 
 from utilities import create_connection, detect_language, sleep
+
+load_dotenv()
 
 MINIMUM_UPVOTE_RATIO = 0.8
 MINIMUM_SCORE = 24
 MINIMUM_NUM_COMMENTS = 16
 REQUIRED_LANGUAGE = "en"
 
-connection = create_connection("database\\granked.db")
+connection = create_connection(os.getenv("DATABASE_PATH"))
 cursor = connection.cursor()
 
-logger = logging.getLogger(__name__)
 logging.basicConfig(filename="ingest_links.log", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 cursor.execute(
     """

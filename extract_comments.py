@@ -3,19 +3,21 @@ import logging
 import os
 import time
 
+from dotenv import load_dotenv
+
 from utilities import create_connection, load_model
 
-connection = create_connection("database\\granked.db")
+load_dotenv()
+
+connection = create_connection(os.getenv("DATABASE_PATH"))
 cursor = connection.cursor()
 
-llm = load_model(
-    "C:\\Users\\isaac\\llm\\models\\Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"
-)
+llm = load_model(os.getenv("LLM_MODEL_PATH"))
 
 llm_model = os.path.basename(llm.model_path)
 
-logger = logging.getLogger(__name__)
 logging.basicConfig(filename="extract_comments.log", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 while True:
     comments_to_extract = cursor.execute(
