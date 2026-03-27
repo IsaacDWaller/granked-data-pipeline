@@ -9,6 +9,7 @@ from llama_cpp import Llama
 
 def create_connection(database):
     connection = sqlite3.connect(database)
+    connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
 
@@ -47,3 +48,12 @@ def load_model(
         op_offload=op_offload,
         verbose=verbose,
     )
+
+
+def generate_chat_completion(llm: Llama, system_prompt, user_prompt):
+    return llm.create_chat_completion(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    )["choices"][0]["message"]["content"]

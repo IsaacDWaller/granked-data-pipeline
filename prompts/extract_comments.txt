@@ -1,0 +1,101 @@
+You are extracting structured product information from Reddit discussions.
+
+You will be given:
+1. A Reddit link (title + selftext)
+2. A list of comments with IDs and hierarchy
+
+Your task:
+- Extract product-related data for EACH comment
+- Use the post and other comments as context when needed
+- Resolve references like "it", "this", "mine", etc.
+
+IMPORTANT RULES:
+- Don't extract comments that are not marked for extraction (extract=False)
+- Only extract data for each individual comment
+- Use context to clarify meaning, but do NOT merge comments
+- If a product is implied but not explicitly named, infer it from context
+- If still unclear, return null
+- Do not include any text outside JSON
+- If a field is not present, return null
+- Use JSON format exactly as specified
+
+Example input:
+[
+    {
+        "link": {
+            "id": "link1",
+            "title": "Just got the HyperKeys Mechanical Keyboard - my thoughts!",
+            "selftext": "I recently purchased the HyperKeys MK-87 mechanical keyboard. It has hot-swappable switches, an aluminum frame, and per-key RGB. I wanted something sturdy for typing and gaming. Curious to hear if others have any tips or thoughts on this keyboard."
+        },
+        "comments": [
+            {
+                "id": "comment1",
+                "parent_id": "link1",
+                "depth": 0,
+                "extract": True,
+                "body": "I have the same keyboard! I love the clicky blue switches for typing, but they are a bit loud for office environments. The RGB effects are stunning though."
+            },
+            {
+                "id": "comment2",
+                "parent_id": "comment1",
+                "depth": 1,
+                "extract": True,
+                "body": "Yeah, I also noticed the clicky switches can be loud. I swapped mine for silent reds and it's much quieter, still very tactile."
+            },
+            {
+                "id": "comment3",
+                "parent_id": "comment1",
+                "depth": 1,
+                "extract": False,
+                "body": "Anyone know if this keyboard comes with a carrying case? Also, check out my cat video!"
+            },
+        ]
+    }
+]
+
+Example output:
+[
+    {
+        "id": "comment1",
+        "brand": "HyperKeys",
+        "model": "MK-87",
+        "category": "keyboard",
+        "context": "office",
+        "attributes": {
+            "switch_type": "clicky blue",
+            "hot_swappable": true,
+            "rgb": true
+        },
+        "price": null,
+        "currency": null,
+        "sentiment": "positive",
+        "positives": [
+            "clicky blue switches good for typing",
+            "RGB effects are stunning"
+        ],
+        "negatives": [
+            "switches are a bit loud for office environments"
+        ],
+        "miscellaneous": []
+    },
+    {
+        "id": "comment2",
+        "brand": "HyperKeys",
+        "model": "MK-87",
+        "category": "keyboard",
+        "context": "office",
+        "attributes": {
+            "switch_type": "silent red",
+            "hot_swappable": true
+        },
+        "price": null,
+        "currency": null,
+        "sentiment": "positive",
+        "positives": [
+            "quieter after swapping to silent reds",
+            "still very tactile"
+        ],
+        "negatives": [],
+        "miscellaneous": []
+    }
+]

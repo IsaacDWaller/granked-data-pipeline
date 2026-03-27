@@ -1,11 +1,13 @@
 import json
 import logging
 import os
+import re
 import time
+from typing import TextIO
 
 from dotenv import load_dotenv
 
-from utilities import create_connection, load_model
+from utilities import create_connection, generate_chat_completion, load_model
 
 MINIMUM_SCORE = 4
 MINIMUM_BODY_LENGTH = 24
@@ -41,36 +43,11 @@ while True:
     if not comments_to_triage:
         break
 
-    system_prompt = """
-You are an assistant that analyses Reddit comments.
+    system_prompt: str
+    file: TextIO
 
-Return ONLY valid JSON.
-
-Output format:
-[
-    {
-        "id": string,
-        "adds_information": integer (0/1),
-        "insight_score": integer (0-10),
-        "summary": string (one sentence)
-    }
-]
-
-Example:
-[
-    {
-        "id": "abc123",
-        "adds_information": 1,
-        "insight_score": 7,
-        "summary": "Explains why TKL keyboards are preferred for space efficiency."
-    }
-]
-
-Rules:
-- Use the exact id from each comment
-- Do not omit any comments
-- Do not include any text outside JSON
-"""
+    with open(os.getenv("TRIAGE_COMMENTS_PROMPT_PATH"), "r") as file:
+        system_prompt = file.read()
 
     comments_text = ""
 
@@ -78,17 +55,17 @@ Rules:
         (id, body) = comment
         comments_text += f"""\n\n<COMMENT id="{id}">\n{body}\n</COMMENT>"""
 
-    response = llm.create_chat_completion(
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": f"Analyse the following comments:{comments_text}",
-            },
-        ],
-    )["choices"][0]["message"]["content"]
+    response = generate_chat_completion(
+        llm, system_prompt, f"Analyse the following comments:{comments_text}"
+    )
 
-    triaged_comments = json.loads(response)
+    match: re.Match | None = re.search(r"\[\s*{.*?}\s*\]", response, re.DOTALL)
+
+    if not match:
+        logging.error(f"Triage comments failed time={time.time()}")
+        continue
+
+    triaged_comments = json.loads(match.group(0))
 
     for comment in triaged_comments:
         (id, adds_information, insight_score, summary) = (
@@ -118,6 +95,6 @@ Rules:
         )
 
         connection.commit()
-        logger.info(f"Triaged comment id={id}")
+        logger.info(f"Triage comment succeeded id={id} time={time.time()}")
 
 connection.close()

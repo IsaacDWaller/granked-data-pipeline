@@ -1,11 +1,17 @@
 import json
 import logging
 import os
+import re
 import time
+from collections import defaultdict
+from typing import TextIO
 
 from dotenv import load_dotenv
 
-from utilities import create_connection, load_model
+from utilities import create_connection, generate_chat_completion, load_model
+
+MINIMUM_INSIGHT_SCORE = 7
+MAXIMUM_TOKENS = 7_000
 
 load_dotenv()
 
@@ -13,172 +19,248 @@ connection = create_connection(os.getenv("DATABASE_PATH"))
 cursor = connection.cursor()
 
 llm = load_model(os.getenv("LLM_MODEL_PATH"))
-
 llm_model = os.path.basename(llm.model_path)
 
 logging.basicConfig(filename="extract_comments.log", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 while True:
-    comments_to_extract = cursor.execute(
+    link_to_extract = cursor.execute(
         """
-        SELECT id, body
-        FROM comment
-        WHERE
-            triaged_at_utc IS NOT NULL AND
-            (extracted_at_utc IS NULL OR extraction_model != ?)
-        LIMIT 16
+        SELECT l.id, l.selftext, l.title
+        FROM link l
+        WHERE l.id = (
+            SELECT c.link_id
+            FROM comment c
+            WHERE c.depth = 0
+            AND c.triaged_at_utc IS NOT NULL
+            AND (c.extracted_at_utc IS NULL OR c.extraction_model != ?)
+            LIMIT 1
+        )
+        LIMIT 1
         """,
         (llm_model,),
-    ).fetchall()
+    ).fetchone()
 
-    if not comments_to_extract:
+    if not link_to_extract:
         break
 
-    system_prompt = """
-You are an assistant that extracts structured data from Reddit comments.
+    (link_id, link_selftext, link_title) = link_to_extract
 
-Return ONLY valid JSON.
+    comments_to_extract = cursor.execute(
+        """
+        SELECT
+            id,
+            created_utc,
+            parent_id,
+            body,
+            depth,
+            adds_information,
+            insight_score
+        FROM comment
+        WHERE link_id = ?
+        ORDER BY depth DESC, created_utc
+        """,
+        (link_id,),
+    ).fetchall()
 
-Output format:
-[
-    {
-        "id": string,
-        "brand": string (product brand),
-        "model": string (product model),
-        "category": string (e.g. "keyboard", "mouse"),
-        "context": string (e.g. "office", "gaming"),
-        "attributes": JSON object (e.g. "{"layout_size": "60%", "switch_type": "mechanical"}"),
-        "price": number,
-        "currency": string (e.g. "USD", "AUD", assume USD if not specified),
-        "sentiment": string ("positive"/"neutral"/"negative"),
-        "positives": JSON array of strings (short phrases),
-        "negatives": JSON array of strings (short phrases),
-        "miscellaneous": JSON array of strings (short phrases)
-    }
-]
+    comments = {}
+    children = defaultdict(list)
 
-Example:
+    for comment_to_extract in comments_to_extract:
+        comment = dict(comment_to_extract)
+        comments[comment["id"]] = comment
+        children[comment["parent_id"]].append(comment["id"])
 
-Input: "I bought the Keychron K2, and it's amazing! The mechanical keys feel great for programming and I like the design, but I wish the backlight was brighter and it was a bit lighter. It took three weeks to ship and comes with a carrying case. Paid $99 USD. Highly recommend it for office work."
+    has_extract = {}
 
-Output:
-[
-    {
-        "id": "abc123",
-        "brand": "Keychron",
-        "model": "K2",
-        "category": "keyboard",
-        "context": "office",
-        "attributes": {"layout_size": "75%", "switch_type": "mechanical"},
-        "price": 99,
-        "currency": "USD",
-        "sentiment": "positive",
-        "positives": ["Mechanical keys feel great for programming.", "I like the design."],
-        "negatives": ["Backlight was not bright enough.", "It was a bit heavy."],
-        "miscellaneous": ["Took three weeks to ship.", "Comes with a carrying case."]
-    }
-]
-
-Rules:
-- Use the exact ID from each comment
-- Do not omit any comments
-- Do not include any text outside JSON
-- If a field is not present, return null
-- Always return valid JSON with these fields
-- Use JSON format exactly as specified
-- For lists, use an array in JSON
-- For attributes, use an object in JSON
-"""
-
-    comments_text = ""
-
-    for comment in comments_to_extract:
-        (id, body) = comment
-        comments_text += f"""\n\n<COMMENT id="{id}">\n{body}\n</COMMENT>"""
-
-    response = llm.create_chat_completion(
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": f"Now extract the same fields for the following comment:{comments_text}",
-            },
-        ],
-    )["choices"][0]["message"]["content"]
-
-    extracted_comments = json.loads(response)
-
-    for comment in extracted_comments:
+    for comment_to_extract in comments_to_extract:
         (
             id,
-            brand,
-            model,
-            category,
-            context,
-            attributes,
-            price,
-            currency,
-            sentiment,
-            positives,
-            negatives,
-            miscellaneous,
-        ) = (
-            comment[key]
-            for key in (
-                "id",
-                "brand",
-                "model",
-                "category",
-                "context",
-                "attributes",
-                "price",
-                "currency",
-                "sentiment",
-                "positives",
-                "negatives",
-                "miscellaneous",
+            created_utc,
+            parent_id,
+            body,
+            depth,
+            adds_information,
+            insight_score,
+        ) = comment_to_extract
+
+        has_extract[id] = (
+            adds_information is not None
+            and adds_information >= 1
+            and insight_score is not None
+            and insight_score >= MINIMUM_INSIGHT_SCORE
+        ) or any(has_extract[child_id] for child_id in children[id])
+
+    top_level_comment_ids = []
+
+    for comment in comments.values():
+        (id, depth) = (comment[key] for key in ("id", "depth"))
+
+        if depth <= 0:
+            top_level_comment_ids.append(id)
+
+    batches = []
+
+    for top_level_comment_id in top_level_comment_ids:
+        if not has_extract.get(top_level_comment_id):
+            continue
+
+        subtree = []
+        stack = [top_level_comment_id]
+
+        while stack:
+            comment_id = stack.pop()
+
+            if not has_extract.get(comment_id):
+                continue
+
+            comment = comments[comment_id].copy()
+
+            (adds_information, insight_score) = (
+                comment[key] for key in ("adds_information", "insight_score")
             )
+
+            comment["extract"] = (
+                adds_information is not None
+                and adds_information >= 1
+                and insight_score is not None
+                and insight_score >= MINIMUM_INSIGHT_SCORE
+            )
+
+            subtree.append(comment)
+
+            for child_id in children[comment_id]:
+                if has_extract.get(child_id):
+                    stack.append(child_id)
+
+        subtree.sort(key=lambda x: x["created_utc"])
+
+        current_batch = []
+        current_tokens = 0
+
+        for comment in subtree:
+            tokens = len(comment["body"]) / 4
+
+            if current_tokens + tokens > MAXIMUM_TOKENS and current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_tokens = 0
+
+            current_batch.append(comment)
+            current_tokens += tokens
+
+        if current_batch:
+            batches.append(current_batch)
+
+    for batch in batches:
+        llm_input = {
+            "link": {"id": link_id, "title": link_title, "selftext": link_selftext},
+            "comments": [],
+        }
+
+        for comment in batch:
+            llm_input["comments"].append(
+                {
+                    "id": comment["id"],
+                    "parent_id": comment["parent_id"],
+                    "depth": comment["depth"],
+                    "extract": comment["extract"],
+                    "body": comment["body"],
+                }
+            )
+
+        system_prompt: str
+        file: TextIO
+
+        with open(os.getenv("EXTRACT_COMMENTS_PROMPT_PATH"), "r") as file:
+            system_prompt = file.read()
+
+        response = generate_chat_completion(
+            llm,
+            system_prompt,
+            f"Now extract the same fields for the following:{llm_input}",
         )
 
-        cursor.execute(
-            """
-            UPDATE comment
-            SET
-                extraction_model = ?,
-                brand = ?,
-                model = ?,
-                category = ?,
-                context = ?,
-                attributes = ?,
-                price = ?,
-                currency = ?,
-                sentiment = ?,
-                positives = ?,
-                negatives = ?,
-                miscellaneous = ?,
-                extracted_at_utc = ?
-            WHERE id = ?
-            """,
+        match: re.Match | None = re.search(r"\[\s*{.*?}\s*\]", response, re.DOTALL)
+
+        if not match:
+            logging.error(
+                f"Extract comments failed link_id={link_id} time={time.time()}"
+            )
+
+            continue
+
+        for comment in json.loads(match.group(0)):
             (
-                llm_model,
+                id,
                 brand,
                 model,
                 category,
                 context,
-                json.dumps(attributes),
+                attributes,
                 price,
                 currency,
                 sentiment,
-                json.dumps(positives),
-                json.dumps(negatives),
-                json.dumps(miscellaneous),
-                time.time(),
-                id,
-            ),
-        )
+                positives,
+                negatives,
+                miscellaneous,
+            ) = (
+                comment[key]
+                for key in (
+                    "id",
+                    "brand",
+                    "model",
+                    "category",
+                    "context",
+                    "attributes",
+                    "price",
+                    "currency",
+                    "sentiment",
+                    "positives",
+                    "negatives",
+                    "miscellaneous",
+                )
+            )
 
-        connection.commit()
-        logger.info(f"Extracted comment id={id}")
+            cursor.execute(
+                """
+                UPDATE comment
+                SET
+                    extraction_model = ?,
+                    brand = ?,
+                    model = ?,
+                    category = ?,
+                    context = ?,
+                    attributes = ?,
+                    price = ?,
+                    currency = ?,
+                    sentiment = ?,
+                    positives = ?,
+                    negatives = ?,
+                    miscellaneous = ?,
+                    extracted_at_utc = ?
+                WHERE id = ?
+                """,
+                (
+                    llm_model,
+                    brand,
+                    model,
+                    category,
+                    context,
+                    json.dumps(attributes),
+                    price,
+                    currency,
+                    sentiment,
+                    json.dumps(positives),
+                    json.dumps(negatives),
+                    json.dumps(miscellaneous),
+                    time.time(),
+                    id,
+                ),
+            )
+
+            connection.commit()
+            logger.info(f"Extract comment succeeded id={id} time={time.time()}")
 
 connection.close()
