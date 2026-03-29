@@ -7,7 +7,11 @@ from typing import TextIO
 
 from dotenv import load_dotenv
 
-from utilities import create_connection, generate_chat_completion, load_model
+from granked_data_pipeline.utilities import (
+    create_connection,
+    generate_chat_completion,
+    load_model,
+)
 
 MINIMUM_SCORE = 4
 MINIMUM_BODY_LENGTH = 24

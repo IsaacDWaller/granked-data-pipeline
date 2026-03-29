@@ -6,7 +6,7 @@ import time
 import requests
 from dotenv import load_dotenv
 
-from utilities import create_connection, detect_language, sleep
+from granked_data_pipeline.utilities import create_connection, detect_language, sleep
 
 load_dotenv()
 
