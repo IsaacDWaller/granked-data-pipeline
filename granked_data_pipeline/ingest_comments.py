@@ -6,7 +6,12 @@ import time
 import requests
 from dotenv import load_dotenv
 
-from granked_data_pipeline.utilities import create_connection, detect_language, sleep
+from granked_data_pipeline.utilities import (
+    create_connection,
+    detect_language,
+    extract_data,
+    sleep,
+)
 
 load_dotenv()
 
@@ -188,26 +193,15 @@ for link in links_to_ingest:
     id, subreddit = link
 
     while True:
-        response = requests.get(
+        response = extract_data(
             f"https://www.reddit.com/r/{subreddit}/comments/{id}/.json",
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-            },
+            logger,
+            "comment",
         )
 
-        status_code = response.status_code
-
-        if status_code != requests.codes.ok:
-            logger.error(
-                f"Link request failed url={response.url} status_code={status_code}"
-            )
-
-            sleep(1, 2)
+        if response.status_code != requests.codes.ok:
+            sleep(2, 4)
             continue
-
-        logger.info(
-            f"Link request succeeded url={response.url} status_code={status_code}"
-        )
 
         for comment in response.json()[1]["data"]["children"]:
             extract_comment(connection, cursor, comment)

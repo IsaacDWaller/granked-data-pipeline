@@ -5,7 +5,12 @@ import time
 import requests
 from dotenv import load_dotenv
 
-from granked_data_pipeline.utilities import create_connection, detect_language, sleep
+from granked_data_pipeline.utilities import (
+    create_connection,
+    detect_language,
+    extract_data,
+    sleep,
+)
 
 load_dotenv()
 
@@ -13,25 +18,6 @@ MINIMUM_UPVOTE_RATIO = 0.8
 MINIMUM_SCORE = 24
 MINIMUM_NUM_COMMENTS = 16
 REQUIRED_LANGUAGE = "en"
-
-
-def extract_links(query, logger: logging.Logger):
-    response = requests.get(
-        "https://www.reddit.com/search.json",
-        params={"q": query, "limit": 100, "include_over_18": True},
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-        },
-    )
-
-    (url, status_code) = (response.url, response.status_code)
-
-    if status_code == requests.codes.ok:
-        logger.info(f"Search request succeeded url={url} status_code={status_code}")
-    else:
-        logger.error(f"Search request failed url={url} status_code={status_code}")
-
-    return response
 
 
 if __name__ == "__main__":
@@ -68,7 +54,12 @@ if __name__ == "__main__":
 
     for query in ["best mechanical keyboard"]:
         while True:
-            response = extract_links(query, logger)
+            response = extract_data(
+                "https://www.reddit.com/search.json",
+                logger,
+                "search",
+                params={"q": query, "limit": 100, "include_over_18": True},
+            )
 
             if response.status_code != requests.codes.ok:
                 sleep(2, 4)
