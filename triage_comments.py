@@ -22,7 +22,12 @@ llm = load_model(os.getenv("LLM_MODEL_PATH"))
 
 model = os.path.basename(llm.model_path)
 
-logging.basicConfig(filename="triage_comments.log", level=logging.INFO)
+logging.basicConfig(
+    filename="triage_comments.log",
+    format="%(created)s:%(levelname)s:%(name)s:%(message)s",
+    level=logging.INFO,
+)
+
 logger = logging.getLogger(__name__)
 
 while True:
@@ -62,7 +67,7 @@ while True:
     match: re.Match | None = re.search(r"\[\s*{.*?}\s*\]", response, re.DOTALL)
 
     if not match:
-        logging.error(f"Triage comments failed time={time.time()}")
+        logging.error("Triage comments failed")
         continue
 
     triaged_comments = json.loads(match.group(0))
@@ -95,6 +100,6 @@ while True:
         )
 
         connection.commit()
-        logger.info(f"Triage comment succeeded id={id} time={time.time()}")
+        logger.info(f"Triage comment succeeded id={id}")
 
 connection.close()

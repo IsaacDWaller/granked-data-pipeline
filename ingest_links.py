@@ -17,7 +17,12 @@ REQUIRED_LANGUAGE = "en"
 connection = create_connection(os.getenv("DATABASE_PATH"))
 cursor = connection.cursor()
 
-logging.basicConfig(filename="ingest_links.log", level=logging.INFO)
+logging.basicConfig(
+    filename="ingest_links.log",
+    format="%(created)s:%(levelname)s:%(name)s:%(message)s",
+    level=logging.INFO,
+)
+
 logger = logging.getLogger(__name__)
 
 cursor.execute(
@@ -54,14 +59,14 @@ for query in ["best mechanical keyboard"]:
 
         if status_code != requests.codes.ok:
             logger.error(
-                f"Search request failed url={response.url} status_code={status_code} time={time.time()}"
+                f"Search request failed url={response.url} status_code={status_code}"
             )
 
             sleep(2, 4)
             continue
 
         logger.info(
-            f"Search request succeeded url={response.url} status_code={status_code} time={time.time()}"
+            f"Search request succeeded url={response.url} status_code={status_code}"
         )
 
         for link in response.json()["data"]["children"]:

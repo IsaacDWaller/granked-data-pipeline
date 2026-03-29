@@ -18,7 +18,7 @@ def detect_language(logger: logging.Logger, text):
     try:
         return detect(text)
     except LangDetectException:
-        logger.error(f"Language detect failed text={text} time={time.time()}")
+        logger.error(f"Language detect failed text={text}")
         return None
 
 

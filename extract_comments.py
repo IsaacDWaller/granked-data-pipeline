@@ -21,7 +21,12 @@ cursor = connection.cursor()
 llm = load_model(os.getenv("LLM_MODEL_PATH"))
 llm_model = os.path.basename(llm.model_path)
 
-logging.basicConfig(filename="extract_comments.log", level=logging.INFO)
+logging.basicConfig(
+    filename="extract_comments.log",
+    format="%(created)s:%(levelname)s:%(name)s:%(message)s",
+    level=logging.INFO,
+)
+
 logger = logging.getLogger(__name__)
 
 while True:
@@ -185,10 +190,7 @@ while True:
         match: re.Match | None = re.search(r"\[\s*{.*?}\s*\]", response, re.DOTALL)
 
         if not match:
-            logging.error(
-                f"Extract comments failed link_id={link_id} time={time.time()}"
-            )
-
+            logging.error(f"Extract comments failed link_id={link_id}")
             continue
 
         for comment in json.loads(match.group(0)):
@@ -261,6 +263,6 @@ while True:
             )
 
             connection.commit()
-            logger.info(f"Extract comment succeeded id={id} time={time.time()}")
+            logger.info(f"Extract comment succeeded id={id}")
 
 connection.close()

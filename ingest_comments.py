@@ -132,7 +132,12 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
 connection = create_connection(os.getenv("DATABASE_PATH"))
 cursor = connection.cursor()
 
-logging.basicConfig(filename="ingest_comments.log", level=logging.INFO)
+logging.basicConfig(
+    filename="ingest_comments.log",
+    format="%(created)s:%(levelname)s:%(name)s:%(message)s",
+    level=logging.INFO,
+)
+
 logger = logging.getLogger(__name__)
 
 cursor.execute(
@@ -194,14 +199,14 @@ for link in links_to_ingest:
 
         if status_code != requests.codes.ok:
             logger.error(
-                f"Link request failed url={response.url} status_code={status_code} time={time.time()}"
+                f"Link request failed url={response.url} status_code={status_code}"
             )
 
             sleep(1, 2)
             continue
 
         logger.info(
-            f"Link request succeeded url={response.url} status_code={status_code} time={time.time()}"
+            f"Link request succeeded url={response.url} status_code={status_code}"
         )
 
         for comment in response.json()[1]["data"]["children"]:
