@@ -1,7 +1,9 @@
 import logging
+import os
 import random
 import sqlite3
 import time
+from typing import TextIO
 
 import requests
 from langdetect import LangDetectException, detect
@@ -72,6 +74,13 @@ def load_model(
         op_offload=op_offload,
         verbose=verbose,
     )
+
+
+def read_file(file):
+    stream: TextIO
+
+    with open(file, "r") as stream:
+        return stream.read()
 
 
 def generate_chat_completion(llm: Llama, system_prompt, user_prompt):

@@ -4,7 +4,7 @@ import os
 import re
 import time
 from collections import defaultdict
-from typing import TextIO
+from typing import Dict
 
 from dotenv import load_dotenv
 
@@ -12,18 +12,13 @@ from granked_data_pipeline.utilities import (
     create_connection,
     generate_chat_completion,
     load_model,
+    read_file,
 )
 
 MINIMUM_INSIGHT_SCORE = 7
 MAXIMUM_TOKENS = 7_000
 
 load_dotenv()
-
-connection = create_connection(os.getenv("DATABASE_PATH"))
-cursor = connection.cursor()
-
-llm = load_model(os.getenv("LLM_MODEL_PATH"))
-llm_model = os.path.basename(llm.model_path)
 
 logging.basicConfig(
     filename="extract_comments.log",
@@ -33,240 +28,298 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-while True:
-    link_to_extract = cursor.execute(
-        """
-        SELECT l.id, l.selftext, l.title
-        FROM link l
-        WHERE l.id = (
-            SELECT c.link_id
-            FROM comment c
-            WHERE c.depth = 0
-            AND c.triaged_at_utc IS NOT NULL
-            AND (c.extracted_at_utc IS NULL OR c.extraction_model != ?)
-            LIMIT 1
+
+def create_prompt_content(link_id, link_selftext, link_title):
+    return {
+        "link": {
+            "id": link_id,
+            "title": link_title,
+            "selftext": link_selftext,
+        },
+        "comments": [],
+    }
+
+
+def get_child_comment_ids(comments_by_id: dict):
+    child_comment_ids = defaultdict(list)
+
+    for comment in comments_by_id.values():
+        child_comment_ids[comment["parent_id"]].append(comment["id"])
+
+    for comments in child_comment_ids.values():
+        comments.sort(key=lambda content_id: comments_by_id[content_id]["created_utc"])
+
+    return child_comment_ids
+
+
+def get_comments_by_depth_descending(comments_by_id: dict):
+    return sorted(
+        comments_by_id.values(), key=lambda comment: comment["depth"], reverse=True
+    )
+
+
+def get_comment_ids_are_in_prompt(
+    comments_by_depth_descending: dict,
+    child_comment_ids: dict,
+    minimum_insight_score,
+):
+    comment_ids_are_in_prompt = {}
+
+    for comment in comments_by_depth_descending:
+        id = comment["id"]
+
+        comment_ids_are_in_prompt[id] = (
+            comment_is_insightful(comment, minimum_insight_score)
+        ) or any(
+            comment_ids_are_in_prompt.get(child_comment_id)
+            for child_comment_id in child_comment_ids[id]
         )
-        LIMIT 1
-        """,
-        (llm_model,),
-    ).fetchone()
 
-    if not link_to_extract:
-        break
+    return comment_ids_are_in_prompt
 
-    (link_id, link_selftext, link_title) = link_to_extract
 
-    comments_to_extract = cursor.execute(
-        """
-        SELECT
-            id,
-            created_utc,
-            parent_id,
-            body,
-            depth,
-            adds_information,
-            insight_score
-        FROM comment
-        WHERE link_id = ?
-        ORDER BY depth DESC, created_utc
-        """,
-        (link_id,),
-    ).fetchall()
+def comment_is_insightful(comment, minimum_insight_score):
+    (adds_information, insight_score) = (
+        comment[key] for key in ("adds_information", "insight_score")
+    )
 
-    comments = {}
-    children = defaultdict(list)
+    return (adds_information or 0) >= 1 and (
+        insight_score or 0
+    ) >= minimum_insight_score
 
-    for comment_to_extract in comments_to_extract:
-        comment = dict(comment_to_extract)
-        comments[comment["id"]] = comment
-        children[comment["parent_id"]].append(comment["id"])
 
-    has_extract = {}
+def get_comment_thread(
+    comments_by_id: Dict[str, dict],
+    child_comment_ids: dict,
+    comment_ids_are_in_prompt: dict,
+    comment_id,
+):
+    if not comment_ids_are_in_prompt.get(comment_id):
+        return []
 
-    for comment_to_extract in comments_to_extract:
-        (
-            id,
-            created_utc,
-            parent_id,
-            body,
-            depth,
-            adds_information,
-            insight_score,
-        ) = comment_to_extract
+    comment = comments_by_id[comment_id].copy()
+    comment["can_be_extracted"] = comment_is_insightful(comment, MINIMUM_INSIGHT_SCORE)
+    comment_thread = [comment]
 
-        has_extract[id] = (
-            adds_information is not None
-            and adds_information >= 1
-            and insight_score is not None
-            and insight_score >= MINIMUM_INSIGHT_SCORE
-        ) or any(has_extract[child_id] for child_id in children[id])
+    for child_comment_id in child_comment_ids.get(comment_id, []):
+        comment_thread.extend(
+            get_comment_thread(
+                comments_by_id,
+                child_comment_ids,
+                comment_ids_are_in_prompt,
+                child_comment_id,
+            )
+        )
 
-    top_level_comment_ids = []
+    return comment_thread
 
-    for comment in comments.values():
-        (id, depth) = (comment[key] for key in ("id", "depth"))
 
-        if depth <= 0:
-            top_level_comment_ids.append(id)
+def get_top_level_comment_ids(comments_by_id: dict):
+    return sorted(
+        [comment["id"] for comment in comments_by_id.values() if comment["depth"] <= 0],
+        key=lambda comment_id: comments_by_id[comment_id]["created_utc"],
+    )
 
-    batches = []
 
-    for top_level_comment_id in top_level_comment_ids:
-        if not has_extract.get(top_level_comment_id):
+if __name__ == "__main__":
+    connection = create_connection(os.getenv("DATABASE_PATH"))
+    cursor = connection.cursor()
+
+    llm = load_model(os.getenv("LLM_MODEL_PATH"))
+    llm_model = os.path.basename(llm.model_path)
+
+    while True:
+        link = cursor.execute(
+            """
+            SELECT l.id, l.selftext, l.title
+            FROM link l
+            WHERE l.id = (
+                SELECT c.link_id
+                FROM comment c
+                WHERE
+                    c.triaged_at_utc IS NOT NULL AND
+                    c.adds_information >= 1 AND
+                    c.insight_score >= ? AND
+                    (c.extracted_at_utc IS NULL OR c.extraction_model != ?)
+                LIMIT 1
+            )
+            LIMIT 1
+            """,
+            (
+                MINIMUM_INSIGHT_SCORE,
+                llm_model,
+            ),
+        ).fetchone()
+
+        if not link:
+            break
+
+        (link_id, link_selftext, link_title) = (
+            link[key] for key in ("id", "selftext", "title")
+        )
+
+        prompt_content = create_prompt_content(link_id, link_selftext, link_title)
+        prompt_content_tokens = len(json.dumps(prompt_content)) // 4
+
+        if prompt_content_tokens > MAXIMUM_TOKENS:
+            # TODO: mark link as extracted
+            # TODO: mark comments as extracted
+            logger.warning(f"Link exceeded maximum tokens id={link_id}")
             continue
 
-        subtree = []
-        stack = [top_level_comment_id]
-
-        while stack:
-            comment_id = stack.pop()
-
-            if not has_extract.get(comment_id):
-                continue
-
-            comment = comments[comment_id].copy()
-
-            (adds_information, insight_score) = (
-                comment[key] for key in ("adds_information", "insight_score")
-            )
-
-            comment["extract"] = (
-                adds_information is not None
-                and adds_information >= 1
-                and insight_score is not None
-                and insight_score >= MINIMUM_INSIGHT_SCORE
-            )
-
-            subtree.append(comment)
-
-            for child_id in children[comment_id]:
-                if has_extract.get(child_id):
-                    stack.append(child_id)
-
-        subtree.sort(key=lambda x: x["created_utc"])
-
-        current_batch = []
-        current_tokens = 0
-
-        for comment in subtree:
-            tokens = len(comment["body"]) / 4
-
-            if current_tokens + tokens > MAXIMUM_TOKENS and current_batch:
-                batches.append(current_batch)
-                current_batch = []
-                current_tokens = 0
-
-            current_batch.append(comment)
-            current_tokens += tokens
-
-        if current_batch:
-            batches.append(current_batch)
-
-    for batch in batches:
-        llm_input = {
-            "link": {"id": link_id, "title": link_title, "selftext": link_selftext},
-            "comments": [],
+        comments_by_id = {
+            comment["id"]: comment
+            for comment in cursor.execute(
+                """
+                SELECT
+                    id,
+                    created_utc,
+                    parent_id,
+                    body,
+                    depth,
+                    adds_information,
+                    insight_score
+                FROM comment
+                WHERE link_id = ?
+                ORDER BY depth DESC, created_utc
+                """,
+                (link_id,),
+            ).fetchall()
         }
 
-        for comment in batch:
-            llm_input["comments"].append(
-                {
-                    "id": comment["id"],
-                    "parent_id": comment["parent_id"],
-                    "depth": comment["depth"],
-                    "extract": comment["extract"],
-                    "body": comment["body"],
-                }
-            )
+        child_comment_ids = get_child_comment_ids(comments_by_id)
+        comments_by_depth_descending = get_comments_by_depth_descending(comments_by_id)
 
-        system_prompt: str
-        file: TextIO
-
-        with open(os.getenv("EXTRACT_COMMENTS_PROMPT_PATH"), "r") as file:
-            system_prompt = file.read()
-
-        response = generate_chat_completion(
-            llm,
-            system_prompt,
-            f"Now extract the same fields for the following:{llm_input}",
+        comment_ids_are_in_prompt = get_comment_ids_are_in_prompt(
+            comments_by_depth_descending,
+            child_comment_ids,
+            MINIMUM_INSIGHT_SCORE,
         )
 
-        match: re.Match | None = re.search(r"\[\s*{.*?}\s*\]", response, re.DOTALL)
+        top_level_comment_ids = get_top_level_comment_ids(comments_by_id)
+        total_tokens = prompt_content_tokens
+        prompt_contents = []
 
-        if not match:
-            logging.error(f"Extract comments failed link_id={link_id}")
-            continue
+        for id in top_level_comment_ids:
+            for comment in get_comment_thread(
+                comments_by_id, child_comment_ids, comment_ids_are_in_prompt, id
+            ):
+                prompt_comment = {
+                    "id": comment["id"],
+                    "parent_id": comment["parent_id"],
+                    "body": comment["body"],
+                    "can_be_extracted": comment["can_be_extracted"],
+                }
 
-        for comment in json.loads(match.group(0)):
-            (
-                id,
-                brand,
-                model,
-                category,
-                context,
-                attributes,
-                price,
-                currency,
-                sentiment,
-                positives,
-                negatives,
-                miscellaneous,
-            ) = (
-                comment[key]
-                for key in (
-                    "id",
-                    "brand",
-                    "model",
-                    "category",
-                    "context",
-                    "attributes",
-                    "price",
-                    "currency",
-                    "sentiment",
-                    "positives",
-                    "negatives",
-                    "miscellaneous",
-                )
+                tokens = len(json.dumps(prompt_comment)) // 4
+
+                if prompt_content_tokens + tokens > MAXIMUM_TOKENS:
+                    # TODO: mark comment as extracted
+
+                    logger.warning(
+                        f"Comment exceeded maximum tokens id={comment['id']}"
+                    )
+
+                    continue
+
+                if total_tokens + tokens > MAXIMUM_TOKENS:
+                    prompt_contents.append(prompt_content)
+
+                    prompt_content = create_prompt_content(
+                        link_id, link_selftext, link_title
+                    )
+
+                    total_tokens = prompt_content_tokens
+
+                prompt_content["comments"].append(prompt_comment)
+                total_tokens += tokens
+
+        if prompt_content["comments"]:
+            prompt_contents.append(prompt_content)
+
+        for content in prompt_contents:
+            response = generate_chat_completion(
+                llm,
+                read_file(os.getenv("EXTRACT_COMMENTS_PROMPT_PATH")),
+                f"Now extract the same fields for the following:{content}",
             )
 
-            cursor.execute(
-                """
-                UPDATE comment
-                SET
-                    extraction_model = ?,
-                    brand = ?,
-                    model = ?,
-                    category = ?,
-                    context = ?,
-                    attributes = ?,
-                    price = ?,
-                    currency = ?,
-                    sentiment = ?,
-                    positives = ?,
-                    negatives = ?,
-                    miscellaneous = ?,
-                    extracted_at_utc = ?
-                WHERE id = ?
-                """,
+            match: re.Match | None = re.search(r"\[\s*{.*?}\s*\]", response, re.DOTALL)
+
+            if not match:
+                logging.error(f"Extract comments failed link_id={link_id}")
+                continue
+
+            for comment in json.loads(match.group(0)):
                 (
-                    llm_model,
+                    id,
                     brand,
                     model,
                     category,
                     context,
-                    json.dumps(attributes),
+                    attributes,
                     price,
                     currency,
                     sentiment,
-                    json.dumps(positives),
-                    json.dumps(negatives),
-                    json.dumps(miscellaneous),
-                    time.time(),
-                    id,
-                ),
-            )
+                    positives,
+                    negatives,
+                    miscellaneous,
+                ) = (
+                    comment[key]
+                    for key in (
+                        "id",
+                        "brand",
+                        "model",
+                        "category",
+                        "context",
+                        "attributes",
+                        "price",
+                        "currency",
+                        "sentiment",
+                        "positives",
+                        "negatives",
+                        "miscellaneous",
+                    )
+                )
 
-            connection.commit()
-            logger.info(f"Extract comment succeeded id={id}")
+                cursor.execute(
+                    """
+                    UPDATE comment
+                    SET
+                        extraction_model = ?,
+                        brand = ?,
+                        model = ?,
+                        category = ?,
+                        context = ?,
+                        attributes = ?,
+                        price = ?,
+                        currency = ?,
+                        sentiment = ?,
+                        positives = ?,
+                        negatives = ?,
+                        miscellaneous = ?,
+                        extracted_at_utc = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        llm_model,
+                        brand,
+                        model,
+                        category,
+                        context,
+                        json.dumps(attributes),
+                        price,
+                        currency,
+                        sentiment,
+                        json.dumps(positives),
+                        json.dumps(negatives),
+                        json.dumps(miscellaneous),
+                        time.time(),
+                        id,
+                    ),
+                )
 
-connection.close()
+                connection.commit()
+                logger.info(f"Extract comment succeeded id={id}")
+
+    connection.close()
