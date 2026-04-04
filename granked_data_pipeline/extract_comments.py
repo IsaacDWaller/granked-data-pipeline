@@ -162,9 +162,32 @@ if __name__ == "__main__":
         prompt_content_tokens = len(json.dumps(prompt_content)) // 4
 
         if prompt_content_tokens > MAXIMUM_TOKENS:
-            # TODO: mark link as extracted
-            # TODO: mark comments as extracted
-            logger.warning(f"Link exceeded maximum tokens id={link_id}")
+            cursor.execute(
+                """
+                UPDATE link
+                SET extracted_at_utc = ?
+                WHERE id = ?
+                """,
+                (time.time(), link_id),
+            )
+
+            connection.commit()
+
+            cursor.execute(
+                """
+                UPDATE comment
+                SET extracted_at_utc = ?
+                WHERE link_id = ?
+                """,
+                (time.time(), link_id),
+            )
+
+            connection.commit()
+
+            logger.warning(
+                f"Link exceeded maximum tokens id={link_id} tokens={prompt_content_tokens}"
+            )
+
             continue
 
         comments_by_id = {
@@ -214,10 +237,19 @@ if __name__ == "__main__":
                 tokens = len(json.dumps(prompt_comment)) // 4
 
                 if prompt_content_tokens + tokens > MAXIMUM_TOKENS:
-                    # TODO: mark comment as extracted
+                    cursor.execute(
+                        """
+                        UPDATE comment
+                        SET extracted_at_utc = ?
+                        WHERE id = ?
+                        """,
+                        (time.time(), comment["id"]),
+                    )
+
+                    connection.commit()
 
                     logger.warning(
-                        f"Comment exceeded maximum tokens id={comment['id']}"
+                        f"Comment exceeded maximum tokens id={comment['id']} tokens={tokens}"
                     )
 
                     continue
