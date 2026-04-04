@@ -1,6 +1,7 @@
+import json
 import logging
-import os
 import random
+import re
 import sqlite3
 import time
 from typing import TextIO
@@ -90,3 +91,12 @@ def generate_chat_completion(llm: Llama, system_prompt, user_prompt):
             {"role": "user", "content": user_prompt},
         ],
     )["choices"][0]["message"]["content"]
+
+
+def get_json_match(string):
+    match: re.Match | None = re.search(r"\[\s*{.*?}\s*\]", string, re.DOTALL)
+
+    if not match:
+        return None
+
+    return json.loads(match.group())

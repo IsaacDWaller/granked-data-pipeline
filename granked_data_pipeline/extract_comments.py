@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import re
 import time
 from collections import defaultdict
 from typing import Dict
@@ -11,6 +10,7 @@ from dotenv import load_dotenv
 from granked_data_pipeline.utilities import (
     create_connection,
     generate_chat_completion,
+    get_json_match,
     load_model,
     read_file,
 )
@@ -276,13 +276,13 @@ if __name__ == "__main__":
                 f"Now extract the same fields for the following:{content}",
             )
 
-            match: re.Match | None = re.search(r"\[\s*{.*?}\s*\]", response, re.DOTALL)
+            match = get_json_match(response)
 
             if not match:
-                logging.error(f"Extract comments failed link_id={link_id}")
+                logging.error(f"Get JSON match failed link_id={link_id}")
                 continue
 
-            for comment in json.loads(match.group(0)):
+            for comment in match:
                 (
                     id,
                     brand,
