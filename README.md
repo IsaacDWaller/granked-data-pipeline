@@ -2,7 +2,7 @@
 
 ## Python script
 
-`uv run <filename>.py`
+`uv run python -m granked_data_pipeline.<filename>`
 
 ## Unit tests
 

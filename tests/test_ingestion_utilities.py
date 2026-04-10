@@ -1,7 +1,7 @@
 import pytest
 from pytest_mock import MockerFixture
 
-from granked_data_pipeline.utilities import extract_data
+from granked_data_pipeline.ingestion_utilities import extract_data
 
 
 @pytest.mark.parametrize(
@@ -18,7 +18,8 @@ def test_extract_data(
     mock_response.status_code = status_code
 
     mocker.patch(
-        "granked_data_pipeline.utilities.requests.get", return_value=mock_response
+        "granked_data_pipeline.ingestion_utilities.requests.get",
+        return_value=mock_response,
     )
 
     mock_logger = mocker.Mock()
