@@ -11,6 +11,7 @@ from granked_data_pipeline.utilities import (
     create_connection,
     generate_chat_completion,
     get_json_match,
+    get_logging_filename,
     load_model,
     read_file,
 )
@@ -21,7 +22,7 @@ MAXIMUM_TOKENS = 7_000
 load_dotenv()
 
 logging.basicConfig(
-    filename="extract_comments.log",
+    filename=get_logging_filename("extract_comments.log"),
     format="%(created)s:%(levelname)s:%(name)s:%(message)s",
     level=logging.INFO,
 )

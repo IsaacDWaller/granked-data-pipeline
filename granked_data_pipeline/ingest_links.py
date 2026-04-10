@@ -9,6 +9,7 @@ from granked_data_pipeline.utilities import (
     create_connection,
     detect_language,
     extract_data,
+    get_logging_filename,
     sleep,
 )
 
@@ -25,7 +26,7 @@ if __name__ == "__main__":
     cursor = connection.cursor()
 
     logging.basicConfig(
-        filename="ingest_links.log",
+        filename=get_logging_filename("ingest_links.log"),
         format="%(created)s:%(levelname)s:%(name)s:%(message)s",
         level=logging.INFO,
     )
