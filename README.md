@@ -1,29 +1,9 @@
 # Run
 
-## Ingest links
+## Python script
 
-| Windows              | MacOS                     |
-| -------------------- | ------------------------- |
-| `py ingest_links.py` | `python3 ingest_links.py` |
+`uv run <filename>.py`
 
-## Ingest comments
-
-| Windows                 | MacOS                        |
-| ----------------------- | ---------------------------- |
-| `py ingest_comments.py` | `python3 ingest_comments.py` |
-
-## Triage comments
-
-| Windows                 | MacOS                        |
-| ----------------------- | ---------------------------- |
-| `py triage_comments.py` | `python3 triage_comments.py` |
-
-## Extract comments
-
-| Windows                 | MacOS                        |
-| ----------------------- | ---------------------------- |
-| `py ingest_comments.py` | `python3 ingest_comments.py` |
-
-## Tests
+## Unit tests
 
 `PYTHONPATH=. pytest`
