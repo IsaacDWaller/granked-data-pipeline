@@ -6,12 +6,14 @@ import time
 import requests
 from dotenv import load_dotenv
 
-from granked_data_pipeline.utilities import (
-    create_connection,
+from granked_data_pipeline.ingestion_utilities import (
     detect_language,
     extract_data,
-    get_logging_filename,
     sleep,
+)
+from granked_data_pipeline.utilities import (
+    create_connection,
+    get_logging_filename,
 )
 
 load_dotenv()

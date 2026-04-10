@@ -4,13 +4,15 @@ import time
 
 from dotenv import load_dotenv
 
-from granked_data_pipeline.utilities import (
-    create_connection,
+from granked_data_pipeline.analysis_utilities import (
     generate_chat_completion,
     get_json_match,
-    get_logging_filename,
     load_model,
     read_file,
+)
+from granked_data_pipeline.utilities import (
+    create_connection,
+    get_logging_filename,
 )
 
 MINIMUM_SCORE = 4
