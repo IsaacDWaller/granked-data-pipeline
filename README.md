@@ -6,4 +6,4 @@
 
 ## Unit tests
 
-`PYTHONPATH=. pytest`
+`uv run -m pytest`
