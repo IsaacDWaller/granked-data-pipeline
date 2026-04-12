@@ -1,12 +1,4 @@
 import os
-import sqlite3
-
-
-def create_connection(database):
-    connection = sqlite3.connect(database)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
 
 
 def get_logging_filename(file_path):

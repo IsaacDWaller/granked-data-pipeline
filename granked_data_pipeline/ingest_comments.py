@@ -1,18 +1,19 @@
 import logging
-import os
-import sqlite3
-import time
 
 import requests
 from dotenv import load_dotenv
 
+from database.comment import create_comment, get_existing_comment, update_comment
+from database.link import (
+    clear_link_analysis_timestamps_by_comment_id,
+    get_unextracted_links,
+)
 from granked_data_pipeline.ingestion_utilities import (
     detect_language,
     extract_data,
     sleep,
 )
 from granked_data_pipeline.utilities import (
-    create_connection,
     get_logging_filename,
 )
 
@@ -31,7 +32,7 @@ def comment_is_valid(score, body, language):
     )
 
 
-def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comment):
+def extract_comment(comment):
     if comment["kind"] != "t1":
         return
 
@@ -61,15 +62,7 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
     ]
 
     language = detect_language(logger, body)
-
-    existing_comment = cursor.execute(
-        """
-        SELECT total_awards_received, score, body, language
-        FROM comment
-        WHERE id = ?
-        """,
-        (id,),
-    ).fetchone()
+    existing_comment = get_existing_comment(id)
 
     if existing_comment:
         (
@@ -85,28 +78,7 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
             or existing_body != body
             or existing_language != language
         ):
-            cursor.execute(
-                """
-                UPDATE comment
-                SET
-                    total_awards_received = ?,
-                    score = ?,
-                    body = ?,
-                    language = ?,
-                    ingested_at_utc = ?
-                WHERE id = ?
-                """,
-                (
-                    total_awards_received,
-                    score,
-                    body,
-                    language,
-                    time.time(),
-                    id,
-                ),
-            )
-
-            connection.commit()
+            update_comment(total_awards_received, score, body, language, id)
 
         if (
             existing_body != body
@@ -121,56 +93,25 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
                 and comment_is_valid(existing_score, existing_body, existing_language)
             )
         ):
-            cursor.execute(
-                """
-                UPDATE link
-                SET triaged_at_utc = NULL, extracted_at_utc = NULL
-                WHERE id = (SELECT link_id FROM comment WHERE id = ?)
-                """,
-                (id,),
-            )
+            clear_link_analysis_timestamps_by_comment_id(id)
 
-            connection.commit()
     else:
-        cursor.execute(
-            """
-            INSERT INTO comment (
-                id,
-                total_awards_received,
-                created_utc,
-                parent_id,
-                score,
-                body,
-                link_id,
-                depth,
-                language,
-                ingested_at_utc
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                id,
-                total_awards_received,
-                created_utc,
-                parent_id[3:],
-                score,
-                body,
-                link_id[3:],
-                depth,
-                language,
-                time.time(),
-            ),
+        create_comment(
+            id,
+            total_awards_received,
+            created_utc,
+            parent_id[3:],
+            score,
+            body,
+            link_id[3:],
+            depth,
+            language,
         )
-
-        connection.commit()
 
     if replies != "":
         for reply in replies["data"]["children"]:
-            extract_comment(connection, cursor, reply)
+            extract_comment(reply)
 
-
-connection = create_connection(os.getenv("DATABASE_PATH"))
-cursor = connection.cursor()
 
 logging.basicConfig(
     filename=get_logging_filename("ingest_comments.log"),
@@ -180,45 +121,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-cursor.execute(
-    """
-    CREATE TABLE IF NOT EXISTS comment (
-        id TEXT PRIMARY KEY,
-        total_awards_received INTEGER NOT NULL,
-        created_utc INTEGER NOT NULL,
-        parent_id TEXT NOT NULL,
-        score INTEGER NOT NULL,
-        body TEXT NOT NULL,
-        link_id TEXT NOT NULL,
-        depth INTEGER NOT NULL,
-        language TEXT,
-        ingested_at_utc REAL NOT NULL,
-        adds_information INTEGER,
-        insight_score INTEGER,
-        summary TEXT,
-        brand TEXT,
-        model TEXT,
-        category TEXT,
-        context TEXT,
-        attributes TEXT,
-        price REAL,
-        currency TEXT,
-        sentiment TEXT,
-        positives TEXT,
-        negatives TEXT,
-        miscellaneous TEXT,
-        FOREIGN KEY (link_id) REFERENCES link(id)
-    ) STRICT
-    """
-)
-
-links = cursor.execute(
-    """
-    SELECT id, subreddit
-    FROM link
-    WHERE extracted_at_utc IS NULL
-    """,
-).fetchall()
+links = get_unextracted_links()
 
 for link in links:
     id, subreddit = link
@@ -227,7 +130,7 @@ for link in links:
         response = extract_data(
             f"https://www.reddit.com/r/{subreddit}/comments/{id}/.json",
             logger,
-            "comment",
+            "link",
         )
 
         if response.status_code != requests.codes.ok:
@@ -235,9 +138,7 @@ for link in links:
             continue
 
         for comment in response.json()[1]["data"]["children"]:
-            extract_comment(connection, cursor, comment)
+            extract_comment(comment)
 
         sleep(1, 2)
         break
-
-connection.close()

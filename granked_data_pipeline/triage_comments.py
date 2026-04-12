@@ -1,10 +1,11 @@
 import json
 import logging
 import os
-import time
 
 from dotenv import load_dotenv
 
+from database.comment import get_comments_to_triage, triage_comment
+from database.link import get_untriaged_link, triage_link
 from granked_data_pipeline.analysis_utilities import (
     create_prompt_comment,
     create_user_prompt,
@@ -21,7 +22,6 @@ from granked_data_pipeline.analysis_utilities import (
     prompt_exceeds_tokens,
 )
 from granked_data_pipeline.utilities import (
-    create_connection,
     get_logging_filename,
 )
 
@@ -49,9 +49,6 @@ def comment_can_be_triaged(comment):
 
 
 if __name__ == "__main__":
-    connection = create_connection(os.getenv("DATABASE_PATH"))
-    cursor = connection.cursor()
-
     llm = load_model(os.getenv("LLM_MODEL_PATH"))
     llm_model = os.path.basename(llm.model_path)
 
@@ -59,14 +56,7 @@ if __name__ == "__main__":
     system_prompt_tokens = get_tokens(llm, system_prompt)
 
     while True:
-        link = cursor.execute(
-            """
-            SELECT id, selftext, title
-            FROM link
-            WHERE triaged_at_utc IS NULL
-            LIMIT 1
-            """,
-        ).fetchone()
+        link = get_untriaged_link()
 
         if not link:
             break
@@ -75,20 +65,7 @@ if __name__ == "__main__":
         user_prompt_string = json.dumps(user_prompt)
 
         if prompt_exceeds_tokens(llm, f"{system_prompt}{user_prompt_string}"):
-            cursor.execute(
-                """
-                UPDATE link
-                SET triage_model = ?, triaged_at_utc = ?
-                WHERE id = ?
-                """,
-                (
-                    llm_model,
-                    time.time(),
-                    link["id"],
-                ),
-            )
-
-            connection.commit()
+            triage_link(llm_model, link["id"])
 
             logger.warning(
                 f"Link exceeded maximum tokens id={link["id"]} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)}"
@@ -97,23 +74,7 @@ if __name__ == "__main__":
             continue
 
         comments_by_id = {
-            comment["id"]: comment
-            for comment in cursor.execute(
-                """
-                SELECT
-                    id,
-                    created_utc,
-                    parent_id,
-                    score,
-                    body,
-                    depth,
-                    language
-                FROM comment
-                WHERE link_id = ?
-                ORDER BY depth DESC, created_utc
-                """,
-                (link["id"],),
-            ).fetchall()
+            comment["id"]: comment for comment in get_comments_to_triage(link["id"])
         }
 
         child_comment_ids = get_child_comment_ids(comments_by_id)
@@ -187,42 +148,10 @@ if __name__ == "__main__":
                 continue
 
             for comment in match:
-                cursor.execute(
-                    """
-                    UPDATE comment
-                    SET
-                        adds_information = ?,
-                        insight_score = ?,
-                        summary = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        comment["adds_information"],
-                        comment["insight_score"],
-                        comment["summary"],
-                        comment["id"],
-                    ),
-                )
-
-                connection.commit()
+                triage_comment(comment)
 
             logger.info(
                 f"Triage user prompt succeeded link_id={link["id"]} user_prompt_index={index} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)} response_tokens={get_tokens(llm, response)} total_tokens={get_tokens(llm, f"{system_prompt}{user_prompt_string}{response}")}"
             )
 
-        cursor.execute(
-            """
-            UPDATE link
-            SET triage_model = ?, triaged_at_utc = ?
-            WHERE id = ?
-            """,
-            (
-                llm_model,
-                time.time(),
-                link["id"],
-            ),
-        )
-
-        connection.commit()
-
-    connection.close()
+        triage_link(llm_model, link["id"])
