@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import time
@@ -5,10 +6,19 @@ import time
 from dotenv import load_dotenv
 
 from granked_data_pipeline.analysis_utilities import (
+    create_prompt_comment,
+    create_user_prompt,
     generate_chat_completion,
+    get_child_comment_ids,
+    get_comment_ids_are_in_prompt,
+    get_comment_thread,
+    get_comments_by_depth_descending,
     get_json_match,
+    get_system_prompt,
+    get_tokens,
+    get_top_level_comment_ids,
     load_model,
-    read_file,
+    prompt_exceeds_tokens,
 )
 from granked_data_pipeline.utilities import (
     create_connection,
@@ -29,6 +39,15 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+def comment_can_be_triaged(comment):
+    return (
+        (comment["score"] or 0) >= MINIMUM_SCORE
+        and len(comment["body"] or "") >= MINIMUM_BODY_LENGTH
+        and (comment["language"] or None) == REQUIRED_LANGUAGE
+    )
+
+
 if __name__ == "__main__":
     connection = create_connection(os.getenv("DATABASE_PATH"))
     cursor = connection.cursor()
@@ -36,61 +55,174 @@ if __name__ == "__main__":
     llm = load_model(os.getenv("LLM_MODEL_PATH"))
     llm_model = os.path.basename(llm.model_path)
 
-    while True:
-        comments = cursor.execute(
-            """
-            SELECT id, body
-            FROM comment
-            WHERE 
-                score >= ? AND
-                LENGTH(body) >= ? AND
-                language = ? AND
-                (triaged_at_utc IS NULL OR triage_model != ?)
-            LIMIT 16
-            """,
-            (MINIMUM_SCORE, MINIMUM_BODY_LENGTH, REQUIRED_LANGUAGE, llm_model),
-        ).fetchall()
+    system_prompt = get_system_prompt("triage_comments.txt")
+    system_prompt_tokens = get_tokens(llm, system_prompt)
 
-        if not comments:
+    while True:
+        link = cursor.execute(
+            """
+            SELECT id, selftext, title
+            FROM link
+            WHERE triaged_at_utc IS NULL
+            LIMIT 1
+            """,
+        ).fetchone()
+
+        if not link:
             break
 
-        response = generate_chat_completion(
-            llm,
-            read_file(os.getenv("TRIAGE_COMMENTS_PROMPT_PATH")),
-            f"Analyse the following comments:{comments}",
-        )
+        user_prompt = create_user_prompt(link["id"], link["selftext"], link["title"])
+        user_prompt_string = json.dumps(user_prompt)
 
-        match = get_json_match(response)
-
-        if not match:
-            logging.error("Get JSON match failed")
-            continue
-
-        for comment in match:
-            id = comment["id"]
-
+        if prompt_exceeds_tokens(llm, f"{system_prompt}{user_prompt_string}"):
             cursor.execute(
                 """
-                UPDATE comment
-                SET
-                    triage_model = ?,
-                    adds_information = ?,
-                    insight_score = ?,
-                    summary = ?,
-                    triaged_at_utc = ?
+                UPDATE link
+                SET triage_model = ?, triaged_at_utc = ?
                 WHERE id = ?
                 """,
                 (
                     llm_model,
-                    comment["adds_information"],
-                    comment["insight_score"],
-                    comment["summary"],
                     time.time(),
-                    id,
+                    link["id"],
                 ),
             )
 
             connection.commit()
-            logger.info(f"Triage comment succeeded id={id}")
 
-connection.close()
+            logger.warning(
+                f"Link exceeded maximum tokens id={link["id"]} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)}"
+            )
+
+            continue
+
+        comments_by_id = {
+            comment["id"]: comment
+            for comment in cursor.execute(
+                """
+                SELECT
+                    id,
+                    created_utc,
+                    parent_id,
+                    score,
+                    body,
+                    depth,
+                    language
+                FROM comment
+                WHERE link_id = ?
+                ORDER BY depth DESC, created_utc
+                """,
+                (link["id"],),
+            ).fetchall()
+        }
+
+        child_comment_ids = get_child_comment_ids(comments_by_id)
+        comments_by_depth_descending = get_comments_by_depth_descending(comments_by_id)
+
+        user_prompt = create_user_prompt(link["id"], link["selftext"], link["title"])
+        user_prompts = []
+
+        for id in get_top_level_comment_ids(comments_by_id):
+            for comment in get_comment_thread(
+                comments_by_id,
+                child_comment_ids,
+                get_comment_ids_are_in_prompt(
+                    comments_by_depth_descending,
+                    child_comment_ids,
+                    comment_can_be_triaged,
+                ),
+                id,
+                comment_can_be_triaged,
+            ):
+                prompt_comment = create_prompt_comment(comment)
+                user_prompt["comments"].append(prompt_comment)
+
+                if len(user_prompt["comments"]) <= 1 and prompt_exceeds_tokens(
+                    llm,
+                    f"{system_prompt}{json.dumps(user_prompt)}",
+                ):
+                    user_prompt["comments"].pop()
+
+                    logger.warning(
+                        f"Comment exceeded maximum tokens id={comment["id"]} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, json.dumps(user_prompt))}"
+                    )
+
+                    continue
+
+                if prompt_exceeds_tokens(
+                    llm,
+                    f"{system_prompt}{json.dumps(user_prompt)}",
+                ):
+                    user_prompt["comments"].pop()
+                    user_prompts.append(user_prompt)
+
+                    user_prompt = create_user_prompt(
+                        link["id"], link["selftext"], link["title"]
+                    )
+
+                user_prompt["comments"].append(prompt_comment)
+
+        if user_prompt["comments"]:
+            user_prompts.append(user_prompt)
+
+        for index, prompt in enumerate(user_prompts):
+            user_prompt_string = json.dumps(prompt)
+
+            response = generate_chat_completion(
+                llm,
+                system_prompt,
+                user_prompt_string,
+            )
+
+            match = get_json_match(response)
+
+            if not match:
+                logger.error(
+                    f"Triage user prompt failed link_id={link["id"]} user_prompt_index={index} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)} response_tokens={get_tokens(llm, response)} total_tokens={get_tokens(llm, f"{system_prompt}{user_prompt_string}{response}")}"
+                )
+
+                with open(f"{link["id"]}_{index}.json", "w") as stream:
+                    json.dump(response, stream)
+
+                continue
+
+            for comment in match:
+                cursor.execute(
+                    """
+                    UPDATE comment
+                    SET
+                        adds_information = ?,
+                        insight_score = ?,
+                        summary = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        comment["adds_information"],
+                        comment["insight_score"],
+                        comment["summary"],
+                        comment["id"],
+                    ),
+                )
+
+                connection.commit()
+
+            logger.info(
+                f"Triage user prompt succeeded link_id={link["id"]} user_prompt_index={index} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)} response_tokens={get_tokens(llm, response)} total_tokens={get_tokens(llm, f"{system_prompt}{user_prompt_string}{response}")}"
+            )
+
+        cursor.execute(
+            """
+            UPDATE link
+            SET triage_model = ?, triaged_at_utc = ?
+            WHERE id = ?
+            """,
+            (
+                llm_model,
+                time.time(),
+                link["id"],
+            ),
+        )
+
+        connection.commit()
+
+    connection.close()

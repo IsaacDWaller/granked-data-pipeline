@@ -18,6 +18,18 @@ from granked_data_pipeline.utilities import (
 
 load_dotenv()
 
+MINIMUM_SCORE = 4
+MINIMUM_BODY_LENGTH = 24
+REQUIRED_LANGUAGE = "en"
+
+
+def comment_is_valid(score, body, language):
+    return (
+        score >= MINIMUM_SCORE
+        and len(body) >= MINIMUM_BODY_LENGTH
+        and language == REQUIRED_LANGUAGE
+    )
+
 
 def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comment):
     if comment["kind"] != "t1":
@@ -52,7 +64,7 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
 
     existing_comment = cursor.execute(
         """
-        SELECT total_awards_received, score, body
+        SELECT total_awards_received, score, body, language
         FROM comment
         WHERE id = ?
         """,
@@ -60,23 +72,35 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
     ).fetchone()
 
     if existing_comment:
-        (existing_total_awards_received, existing_score, existing_body) = (
-            existing_comment
-        )
+        (
+            existing_total_awards_received,
+            existing_score,
+            existing_body,
+            existing_language,
+        ) = existing_comment
 
         if (
             existing_total_awards_received != total_awards_received
             or existing_score != score
+            or existing_body != body
+            or existing_language != language
         ):
             cursor.execute(
                 """
                 UPDATE comment
-                SET total_awards_received = ?, score = ?, ingested_at_utc = ?
+                SET
+                    total_awards_received = ?,
+                    score = ?,
+                    body = ?,
+                    language = ?,
+                    ingested_at_utc = ?
                 WHERE id = ?
                 """,
                 (
                     total_awards_received,
                     score,
+                    body,
+                    language,
                     time.time(),
                     id,
                 ),
@@ -84,18 +108,26 @@ def extract_comment(connection: sqlite3.Connection, cursor: sqlite3.Cursor, comm
 
             connection.commit()
 
-        if existing_body != body:
+        if (
+            existing_body != body
+            or (
+                comment_is_valid(score, body, language)
+                and not comment_is_valid(
+                    existing_score, existing_body, existing_language
+                )
+            )
+            or (
+                not comment_is_valid(score, body, language)
+                and comment_is_valid(existing_score, existing_body, existing_language)
+            )
+        ):
             cursor.execute(
                 """
-                UPDATE comment
-                SET body = ?, ingested_at_utc = ?, triaged_at_utc = NULL
-                WHERE id = ?
+                UPDATE link
+                SET triaged_at_utc = NULL, extracted_at_utc = NULL
+                WHERE id = (SELECT link_id FROM comment WHERE id = ?)
                 """,
-                (
-                    body,
-                    time.time(),
-                    id,
-                ),
+                (id,),
             )
 
             connection.commit()
@@ -161,12 +193,9 @@ cursor.execute(
         depth INTEGER NOT NULL,
         language TEXT,
         ingested_at_utc REAL NOT NULL,
-        triage_model TEXT,
         adds_information INTEGER,
         insight_score INTEGER,
         summary TEXT,
-        triaged_at_utc REAL,
-        extraction_model TEXT,
         brand TEXT,
         model TEXT,
         category TEXT,
@@ -178,21 +207,20 @@ cursor.execute(
         positives TEXT,
         negatives TEXT,
         miscellaneous TEXT,
-        extracted_at_utc REAL,
         FOREIGN KEY (link_id) REFERENCES link(id)
     ) STRICT
     """
 )
 
-links_to_ingest = cursor.execute(
+links = cursor.execute(
     """
     SELECT id, subreddit
     FROM link
-    WHERE triaged_at_utc IS NULL
+    WHERE extracted_at_utc IS NULL
     """,
 ).fetchall()
 
-for link in links_to_ingest:
+for link in links:
     id, subreddit = link
 
     while True:

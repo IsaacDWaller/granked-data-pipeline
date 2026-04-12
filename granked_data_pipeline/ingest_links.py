@@ -50,7 +50,9 @@ if __name__ == "__main__":
             language TEXT,
             ingested_at_utc REAL NOT NULL,
             triage_model TEXT,
-            triaged_at_utc REAL
+            triaged_at_utc REAL,
+            extraction_model TEXT,
+            extracted_at_utc REAL
         ) STRICT
         """
     )
@@ -144,7 +146,9 @@ if __name__ == "__main__":
                     ) = existing_link
 
                     if (
-                        existing_upvote_ratio != upvote_ratio
+                        existing_selftext != selftext
+                        or existing_title != title
+                        or existing_upvote_ratio != upvote_ratio
                         or existing_total_awards_received != total_awards_received
                         or existing_score != score
                         or existing_num_comments != num_comments
@@ -153,6 +157,8 @@ if __name__ == "__main__":
                             """
                             UPDATE link
                             SET
+                                selftext = ?,
+                                title = ?,
                                 upvote_ratio = ?,
                                 total_awards_received = ?,
                                 score = ?,
@@ -161,6 +167,8 @@ if __name__ == "__main__":
                             WHERE id = ?
                             """,
                             (
+                                selftext,
+                                title,
                                 upvote_ratio,
                                 total_awards_received,
                                 score,
@@ -176,19 +184,10 @@ if __name__ == "__main__":
                         cursor.execute(
                             """
                             UPDATE link
-                            SET
-                                selftext = ?,
-                                title = ?,
-                                ingested_at_utc = ?,
-                                triaged_at_utc = NULL
+                            SET triaged_at_utc = NULL, extracted_at_utc = NULL
                             WHERE id = ?
                             """,
-                            (
-                                selftext,
-                                title,
-                                time.time(),
-                                id,
-                            ),
+                            (id,),
                         )
 
                         connection.commit()
