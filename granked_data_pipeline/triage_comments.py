@@ -4,8 +4,8 @@ import os
 
 from dotenv import load_dotenv
 
-from database.comment import get_comments_to_triage, triage_comment
-from database.link import get_untriaged_link, triage_link
+from database.comment import get_comments_to_analyse, triage_comment
+from database.link import get_link_to_triage, triage_link
 from granked_data_pipeline.analysis_utilities import (
     create_prompt_comment,
     create_user_prompt,
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     system_prompt_tokens = get_tokens(llm, system_prompt)
 
     while True:
-        link = get_untriaged_link()
+        link = get_link_to_triage()
 
         if not link:
             break
@@ -74,7 +74,7 @@ if __name__ == "__main__":
             continue
 
         comments_by_id = {
-            comment["id"]: comment for comment in get_comments_to_triage(link["id"])
+            comment["id"]: comment for comment in get_comments_to_analyse(link["id"])
         }
 
         child_comment_ids = get_child_comment_ids(comments_by_id)
@@ -97,22 +97,23 @@ if __name__ == "__main__":
             ):
                 prompt_comment = create_prompt_comment(comment)
                 user_prompt["comments"].append(prompt_comment)
+                user_prompt_string = json.dumps(user_prompt)
 
                 if len(user_prompt["comments"]) <= 1 and prompt_exceeds_tokens(
                     llm,
-                    f"{system_prompt}{json.dumps(user_prompt)}",
+                    f"{system_prompt}{user_prompt_string}",
                 ):
                     user_prompt["comments"].pop()
 
                     logger.warning(
-                        f"Comment exceeded maximum tokens id={comment["id"]} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, json.dumps(user_prompt))}"
+                        f"Comment exceeded maximum tokens id={comment["id"]} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)}"
                     )
 
                     continue
 
                 if prompt_exceeds_tokens(
                     llm,
-                    f"{system_prompt}{json.dumps(user_prompt)}",
+                    f"{system_prompt}{user_prompt_string}",
                 ):
                     user_prompt["comments"].pop()
                     user_prompts.append(user_prompt)
@@ -139,11 +140,8 @@ if __name__ == "__main__":
 
             if not match:
                 logger.error(
-                    f"Triage user prompt failed link_id={link["id"]} user_prompt_index={index} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)} response_tokens={get_tokens(llm, response)} total_tokens={get_tokens(llm, f"{system_prompt}{user_prompt_string}{response}")}"
+                    f"Triage failed link_id={link["id"]} user_prompt_index={index} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)} response_tokens={get_tokens(llm, response)} total_tokens={get_tokens(llm, f"{system_prompt}{user_prompt_string}{response}")}"
                 )
-
-                with open(f"{link["id"]}_{index}.json", "w") as stream:
-                    json.dump(response, stream)
 
                 continue
 
@@ -151,7 +149,7 @@ if __name__ == "__main__":
                 triage_comment(comment)
 
             logger.info(
-                f"Triage user prompt succeeded link_id={link["id"]} user_prompt_index={index} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)} response_tokens={get_tokens(llm, response)} total_tokens={get_tokens(llm, f"{system_prompt}{user_prompt_string}{response}")}"
+                f"Triage succeeded link_id={link["id"]} user_prompt_index={index} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)} response_tokens={get_tokens(llm, response)} total_tokens={get_tokens(llm, f"{system_prompt}{user_prompt_string}{response}")}"
             )
 
         triage_link(llm_model, link["id"])

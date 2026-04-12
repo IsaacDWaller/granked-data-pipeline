@@ -1,25 +1,32 @@
 import json
 import logging
 import os
-import time
-from collections import defaultdict
-from typing import Dict
 
 from dotenv import load_dotenv
 
+from database.comment import get_comments_to_analyse
+from database.link import extract_link, get_link_to_extract
 from granked_data_pipeline.analysis_utilities import (
+    create_prompt_comment,
+    create_user_prompt,
     generate_chat_completion,
+    get_child_comment_ids,
+    get_comment_ids_are_in_prompt,
+    get_comment_thread,
+    get_comments_by_depth_descending,
     get_json_match,
+    get_system_prompt,
+    get_tokens,
+    get_top_level_comment_ids,
     load_model,
-    read_file,
+    prompt_exceeds_tokens,
 )
+from granked_data_pipeline.ingest_comments import extract_comment
 from granked_data_pipeline.utilities import (
-    create_connection,
     get_logging_filename,
 )
 
 MINIMUM_INSIGHT_SCORE = 7
-MAXIMUM_TOKENS = 7_000
 
 load_dotenv()
 
@@ -32,329 +39,114 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_prompt_content(link_id, link_selftext, link_title):
-    return {
-        "link": {
-            "id": link_id,
-            "title": link_title,
-            "selftext": link_selftext,
-        },
-        "comments": [],
-    }
-
-
-def get_child_comment_ids(comments_by_id: dict):
-    child_comment_ids = defaultdict(list)
-
-    for comment in comments_by_id.values():
-        child_comment_ids[comment["parent_id"]].append(comment["id"])
-
-    for comments in child_comment_ids.values():
-        comments.sort(key=lambda content_id: comments_by_id[content_id]["created_utc"])
-
-    return child_comment_ids
-
-
-def get_comments_by_depth_descending(comments_by_id: dict):
-    return sorted(
-        comments_by_id.values(), key=lambda comment: comment["depth"], reverse=True
-    )
-
-
-def get_comment_ids_are_in_prompt(
-    comments_by_depth_descending: dict,
-    child_comment_ids: dict,
-    minimum_insight_score,
-):
-    comment_ids_are_in_prompt = {}
-
-    for comment in comments_by_depth_descending:
-        id = comment["id"]
-
-        comment_ids_are_in_prompt[id] = (
-            comment_is_insightful(comment, minimum_insight_score)
-        ) or any(
-            comment_ids_are_in_prompt.get(child_comment_id)
-            for child_comment_id in child_comment_ids[id]
-        )
-
-    return comment_ids_are_in_prompt
-
-
-def comment_is_insightful(comment, minimum_insight_score):
-    (adds_information, insight_score) = (
-        comment[key] for key in ("adds_information", "insight_score")
-    )
-
-    return (adds_information or 0) >= 1 and (
-        insight_score or 0
-    ) >= minimum_insight_score
-
-
-def get_comment_thread(
-    comments_by_id: Dict[str, dict],
-    child_comment_ids: dict,
-    comment_ids_are_in_prompt: dict,
-    comment_id,
-):
-    if not comment_ids_are_in_prompt.get(comment_id):
-        return []
-
-    comment = comments_by_id[comment_id].copy()
-    comment["can_be_extracted"] = comment_is_insightful(comment, MINIMUM_INSIGHT_SCORE)
-    comment_thread = [comment]
-
-    for child_comment_id in child_comment_ids.get(comment_id, []):
-        comment_thread.extend(
-            get_comment_thread(
-                comments_by_id,
-                child_comment_ids,
-                comment_ids_are_in_prompt,
-                child_comment_id,
-            )
-        )
-
-    return comment_thread
-
-
-def get_top_level_comment_ids(comments_by_id: dict):
-    return sorted(
-        [comment["id"] for comment in comments_by_id.values() if comment["depth"] <= 0],
-        key=lambda comment_id: comments_by_id[comment_id]["created_utc"],
+def comment_can_be_extracted(comment):
+    return ((comment["adds_information"] or 0) >= 1) and (
+        (comment["insight_score"] or 0) >= MINIMUM_INSIGHT_SCORE
     )
 
 
 if __name__ == "__main__":
-    connection = create_connection(os.getenv("DATABASE_PATH"))
-    cursor = connection.cursor()
-
     llm = load_model(os.getenv("LLM_MODEL_PATH"))
     llm_model = os.path.basename(llm.model_path)
 
+    system_prompt = get_system_prompt("extract_comments.txt")
+    system_prompt_tokens = get_tokens(llm, system_prompt)
+
     while True:
-        link = cursor.execute(
-            """
-            SELECT l.id, l.selftext, l.title
-            FROM link l
-            WHERE l.id = (
-                SELECT c.link_id
-                FROM comment c
-                WHERE
-                    c.triaged_at_utc IS NOT NULL AND
-                    c.adds_information >= 1 AND
-                    c.insight_score >= ? AND
-                    (c.extracted_at_utc IS NULL OR c.extraction_model != ?)
-                LIMIT 1
-            )
-            LIMIT 1
-            """,
-            (
-                MINIMUM_INSIGHT_SCORE,
-                llm_model,
-            ),
-        ).fetchone()
+        link = get_link_to_extract()
 
         if not link:
             break
 
-        (link_id, link_selftext, link_title) = (
-            link[key] for key in ("id", "selftext", "title")
-        )
+        user_prompt = create_user_prompt(link["id"], link["selftext"], link["title"])
+        user_prompt_string = json.dumps(user_prompt)
 
-        prompt_content = create_prompt_content(link_id, link_selftext, link_title)
-        prompt_content_tokens = len(json.dumps(prompt_content)) // 4
-
-        if prompt_content_tokens > MAXIMUM_TOKENS:
-            cursor.execute(
-                """
-                UPDATE link
-                SET extracted_at_utc = ?
-                WHERE id = ?
-                """,
-                (time.time(), link_id),
-            )
-
-            connection.commit()
-
-            cursor.execute(
-                """
-                UPDATE comment
-                SET extracted_at_utc = ?
-                WHERE link_id = ?
-                """,
-                (time.time(), link_id),
-            )
-
-            connection.commit()
+        if prompt_exceeds_tokens(llm, f"{system_prompt}{user_prompt_string}"):
+            extract_link(llm_model, link["id"])
 
             logger.warning(
-                f"Link exceeded maximum tokens id={link_id} tokens={prompt_content_tokens}"
+                f"Link exceeded maximum tokens id={link["id"]} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)}"
             )
 
             continue
 
         comments_by_id = {
-            comment["id"]: comment
-            for comment in cursor.execute(
-                """
-                SELECT
-                    id,
-                    created_utc,
-                    parent_id,
-                    body,
-                    depth,
-                    adds_information,
-                    insight_score
-                FROM comment
-                WHERE link_id = ?
-                ORDER BY depth DESC, created_utc
-                """,
-                (link_id,),
-            ).fetchall()
+            comment["id"]: comment for comment in get_comments_to_analyse(link["id"])
         }
 
         child_comment_ids = get_child_comment_ids(comments_by_id)
         comments_by_depth_descending = get_comments_by_depth_descending(comments_by_id)
 
-        comment_ids_are_in_prompt = get_comment_ids_are_in_prompt(
-            comments_by_depth_descending,
-            child_comment_ids,
-            MINIMUM_INSIGHT_SCORE,
-        )
+        user_prompt = create_user_prompt(link["id"], link["selftext"], link["title"])
+        user_prompts = []
 
-        top_level_comment_ids = get_top_level_comment_ids(comments_by_id)
-        total_tokens = prompt_content_tokens
-        prompt_contents = []
-
-        for id in top_level_comment_ids:
+        for id in get_top_level_comment_ids(comments_by_id):
             for comment in get_comment_thread(
-                comments_by_id, child_comment_ids, comment_ids_are_in_prompt, id
+                comments_by_id,
+                child_comment_ids,
+                get_comment_ids_are_in_prompt(
+                    comments_by_depth_descending,
+                    child_comment_ids,
+                    comment_can_be_extracted,
+                ),
+                id,
+                comment_can_be_extracted,
             ):
-                prompt_comment = {
-                    "id": comment["id"],
-                    "parent_id": comment["parent_id"],
-                    "body": comment["body"],
-                    "can_be_extracted": comment["can_be_extracted"],
-                }
+                prompt_comment = create_prompt_comment(comment)
+                user_prompt["comments"].append(prompt_comment)
+                user_prompt_string = json.dumps(user_prompt)
 
-                tokens = len(json.dumps(prompt_comment)) // 4
-
-                if prompt_content_tokens + tokens > MAXIMUM_TOKENS:
-                    cursor.execute(
-                        """
-                        UPDATE comment
-                        SET extracted_at_utc = ?
-                        WHERE id = ?
-                        """,
-                        (time.time(), comment["id"]),
-                    )
-
-                    connection.commit()
+                if len(user_prompt["comments"]) <= 1 and prompt_exceeds_tokens(
+                    llm,
+                    f"{system_prompt}{user_prompt_string}",
+                ):
+                    user_prompt["comments"].pop()
 
                     logger.warning(
-                        f"Comment exceeded maximum tokens id={comment['id']} tokens={tokens}"
+                        f"Comment exceeded maximum tokens id={comment["id"]} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)}"
                     )
 
                     continue
 
-                if total_tokens + tokens > MAXIMUM_TOKENS:
-                    prompt_contents.append(prompt_content)
+                if prompt_exceeds_tokens(
+                    llm,
+                    f"{system_prompt}{user_prompt_string}",
+                ):
+                    user_prompt["comments"].pop()
+                    user_prompts.append(user_prompt)
 
-                    prompt_content = create_prompt_content(
-                        link_id, link_selftext, link_title
+                    user_prompt = create_user_prompt(
+                        link["id"], link["selftext"], link["title"]
                     )
 
-                    total_tokens = prompt_content_tokens
+                user_prompt["comments"].append(prompt_comment)
 
-                prompt_content["comments"].append(prompt_comment)
-                total_tokens += tokens
+        if user_prompt["comments"]:
+            user_prompts.append(user_prompt)
 
-        if prompt_content["comments"]:
-            prompt_contents.append(prompt_content)
+        for index, prompt in enumerate(user_prompts):
+            user_prompt_string = json.dumps(prompt)
 
-        for content in prompt_contents:
             response = generate_chat_completion(
                 llm,
-                read_file(os.getenv("EXTRACT_COMMENTS_PROMPT_PATH")),
-                f"Now extract the same fields for the following:{content}",
+                system_prompt,
+                user_prompt_string,
             )
 
             match = get_json_match(response)
 
             if not match:
-                logging.error(f"Get JSON match failed link_id={link_id}")
+                logger.error(
+                    f"Extraction failed link_id={link["id"]} user_prompt_index={index} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)} response_tokens={get_tokens(llm, response)} total_tokens={get_tokens(llm, f"{system_prompt}{user_prompt_string}{response}")}"
+                )
+
                 continue
 
             for comment in match:
-                (
-                    id,
-                    brand,
-                    model,
-                    category,
-                    context,
-                    attributes,
-                    price,
-                    currency,
-                    sentiment,
-                    positives,
-                    negatives,
-                    miscellaneous,
-                ) = (
-                    comment[key]
-                    for key in (
-                        "id",
-                        "brand",
-                        "model",
-                        "category",
-                        "context",
-                        "attributes",
-                        "price",
-                        "currency",
-                        "sentiment",
-                        "positives",
-                        "negatives",
-                        "miscellaneous",
-                    )
-                )
+                extract_comment(llm_model, comment)
 
-                cursor.execute(
-                    """
-                    UPDATE comment
-                    SET
-                        extraction_model = ?,
-                        brand = ?,
-                        model = ?,
-                        category = ?,
-                        context = ?,
-                        attributes = ?,
-                        price = ?,
-                        currency = ?,
-                        sentiment = ?,
-                        positives = ?,
-                        negatives = ?,
-                        miscellaneous = ?,
-                        extracted_at_utc = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        llm_model,
-                        brand,
-                        model,
-                        category,
-                        context,
-                        json.dumps(attributes),
-                        price,
-                        currency,
-                        sentiment,
-                        json.dumps(positives),
-                        json.dumps(negatives),
-                        json.dumps(miscellaneous),
-                        time.time(),
-                        id,
-                    ),
-                )
+            logger.info(
+                f"Extraction succeeded link_id={link["id"]} user_prompt_index={index} system_prompt_tokens={system_prompt_tokens} user_prompt_tokens={get_tokens(llm, user_prompt_string)} response_tokens={get_tokens(llm, response)} total_tokens={get_tokens(llm, f"{system_prompt}{user_prompt_string}{response}")}"
+            )
 
-                connection.commit()
-                logger.info(f"Extract comment succeeded id={id}")
-
-    connection.close()
+        extract_link(llm_model, link["id"])

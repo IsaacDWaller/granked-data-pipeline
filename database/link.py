@@ -75,12 +75,23 @@ def get_link(link_id):
     )
 
 
-def get_untriaged_link():
+def get_link_to_triage():
     return fetchone(
         """
         SELECT id, selftext, title
         FROM link
         WHERE triaged_at_utc IS NULL
+        LIMIT 1
+        """,
+    )
+
+
+def get_link_to_extract():
+    return fetchone(
+        """
+        SELECT id, selftext, title
+        FROM link
+        WHERE extracted_at_utc IS NULL
         LIMIT 1
         """,
     )
@@ -120,6 +131,21 @@ def triage_link(llm_model, link_id):
         """
         UPDATE link
         SET triage_model = ?, triaged_at_utc = ?
+        WHERE id = ?
+        """,
+        (
+            llm_model,
+            time.time(),
+            link_id,
+        ),
+    )
+
+
+def extract_link(llm_model, link_id):
+    execute(
+        """
+        UPDATE link
+        SET extraction_model = ?, extracted_at_utc = ?
         WHERE id = ?
         """,
         (

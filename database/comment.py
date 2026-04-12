@@ -1,3 +1,4 @@
+import json
 import time
 
 from database.database import execute, fetchall, fetchone
@@ -45,7 +46,7 @@ def create_comment(
     )
 
 
-def get_comments_to_triage(link_id):
+def get_comments_to_analyse(link_id):
     return fetchall(
         """
         SELECT
@@ -112,6 +113,45 @@ def triage_comment(comment):
             comment["adds_information"],
             comment["insight_score"],
             comment["summary"],
+            comment["id"],
+        ),
+    )
+
+
+def extract_comment(llm_model, comment):
+    execute(
+        """
+        UPDATE comment
+        SET
+            extraction_model = ?,
+            brand = ?,
+            model = ?,
+            category = ?,
+            context = ?,
+            attributes = ?,
+            price = ?,
+            currency = ?,
+            sentiment = ?,
+            positives = ?,
+            negatives = ?,
+            miscellaneous = ?,
+            extracted_at_utc = ?
+        WHERE id = ?
+        """,
+        (
+            llm_model,
+            comment["brand"],
+            comment["model"],
+            comment["category"],
+            comment["context"],
+            json.dumps(comment["attributes"]),
+            comment["price"],
+            comment["currency"],
+            comment["sentiment"],
+            json.dumps(comment["positives"]),
+            json.dumps(comment["negatives"]),
+            json.dumps(comment["miscellaneous"]),
+            time.time(),
             comment["id"],
         ),
     )
