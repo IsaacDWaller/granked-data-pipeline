@@ -48,6 +48,16 @@ def create_link(
     )
 
 
+def get_uningested_links():
+    return fetchall(
+        """
+        SELECT id, subreddit
+        FROM link
+        WHERE ingested_at_utc IS NULL
+        """,
+    )
+
+
 def get_unextracted_links():
     return fetchall(
         """
@@ -156,7 +166,7 @@ def extract_link(llm_model, link_id):
     )
 
 
-def clear_link_analysis_timestamps(link_id):
+def clear_triaged_links(link_id):
     execute(
         """
         UPDATE link
@@ -167,7 +177,7 @@ def clear_link_analysis_timestamps(link_id):
     )
 
 
-def clear_link_analysis_timestamps_by_comment_id(comment_id):
+def clear_triaged_links_by_comment_id(comment_id):
     execute(
         """
         UPDATE link

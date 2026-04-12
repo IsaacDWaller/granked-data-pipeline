@@ -4,7 +4,7 @@ import requests
 from dotenv import load_dotenv
 
 from database.link import (
-    clear_link_analysis_timestamps,
+    clear_triaged_links,
     create_link,
     delete_link,
     get_link,
@@ -119,7 +119,7 @@ if __name__ == "__main__":
                         )
 
                     if existing_selftext != selftext or existing_title != title:
-                        clear_link_analysis_timestamps(id)
+                        clear_triaged_links(id)
 
                 elif (
                     not existing_link

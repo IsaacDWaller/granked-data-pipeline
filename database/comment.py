@@ -26,10 +26,9 @@ def create_comment(
             body,
             link_id,
             depth,
-            language,
-            ingested_at_utc
+            language
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             id,
@@ -41,7 +40,6 @@ def create_comment(
             link_id,
             depth,
             language,
-            time.time(),
         ),
     )
 
@@ -56,7 +54,9 @@ def get_comments_to_analyse(link_id):
             score,
             body,
             depth,
-            language
+            language,
+            adds_information,
+            insight_score
         FROM comment
         WHERE link_id = ?
         ORDER BY depth DESC, created_utc
@@ -84,8 +84,7 @@ def update_comment(total_awards_received, score, body, language, id):
             total_awards_received = ?,
             score = ?,
             body = ?,
-            language = ?,
-            ingested_at_utc = ?
+            language = ?
         WHERE id = ?
         """,
         (
@@ -93,7 +92,6 @@ def update_comment(total_awards_received, score, body, language, id):
             score,
             body,
             language,
-            time.time(),
             id,
         ),
     )
@@ -118,12 +116,11 @@ def triage_comment(comment):
     )
 
 
-def extract_comment(llm_model, comment):
+def extract_comment(comment):
     execute(
         """
         UPDATE comment
         SET
-            extraction_model = ?,
             brand = ?,
             model = ?,
             category = ?,
@@ -134,12 +131,10 @@ def extract_comment(llm_model, comment):
             sentiment = ?,
             positives = ?,
             negatives = ?,
-            miscellaneous = ?,
-            extracted_at_utc = ?
+            miscellaneous = ?
         WHERE id = ?
         """,
         (
-            llm_model,
             comment["brand"],
             comment["model"],
             comment["category"],
@@ -151,7 +146,6 @@ def extract_comment(llm_model, comment):
             json.dumps(comment["positives"]),
             json.dumps(comment["negatives"]),
             json.dumps(comment["miscellaneous"]),
-            time.time(),
             comment["id"],
         ),
     )

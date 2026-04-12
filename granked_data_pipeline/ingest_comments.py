@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 
 from database.comment import create_comment, get_existing_comment, update_comment
 from database.link import (
-    clear_link_analysis_timestamps_by_comment_id,
-    get_unextracted_links,
+    clear_triaged_links_by_comment_id,
+    get_uningested_links,
 )
 from granked_data_pipeline.ingestion_utilities import (
     detect_language,
@@ -101,7 +101,7 @@ def extract_comment(comment):
                 and comment_is_valid(existing_score, existing_body, existing_language)
             )
         ):
-            clear_link_analysis_timestamps_by_comment_id(id)
+            clear_triaged_links_by_comment_id(id)
 
     else:
         create_comment(
@@ -122,7 +122,7 @@ def extract_comment(comment):
 
 
 if __name__ == "__main__":
-    links = get_unextracted_links()
+    links = get_uningested_links()
 
     for link in links:
         id, subreddit = link

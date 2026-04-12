@@ -4,8 +4,8 @@ import os
 
 from dotenv import load_dotenv
 
+from database.comment import extract_comment
 from database.link import extract_link, get_link_to_extract
-from granked_data_pipeline.ingest_comments import extract_comment
 from granked_data_pipeline.llm_utilities import (
     generate_chat_completion,
     get_llm_model,

@@ -79,7 +79,6 @@ if __name__ == "__main__":
             link_id TEXT NOT NULL,
             depth INTEGER NOT NULL,
             language TEXT,
-            ingested_at_utc REAL NOT NULL,
             adds_information INTEGER,
             insight_score INTEGER,
             summary TEXT,
