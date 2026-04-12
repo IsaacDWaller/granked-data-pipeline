@@ -17,11 +17,19 @@ from granked_data_pipeline.utilities import (
     get_logging_filename,
 )
 
-load_dotenv()
-
 MINIMUM_SCORE = 4
 MINIMUM_BODY_LENGTH = 24
 REQUIRED_LANGUAGE = "en"
+
+load_dotenv()
+
+logging.basicConfig(
+    filename=get_logging_filename("ingest_comments.log"),
+    format="%(created)s:%(levelname)s:%(name)s:%(message)s",
+    level=logging.INFO,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def comment_is_valid(score, body, language):
@@ -113,32 +121,25 @@ def extract_comment(comment):
             extract_comment(reply)
 
 
-logging.basicConfig(
-    filename=get_logging_filename("ingest_comments.log"),
-    format="%(created)s:%(levelname)s:%(name)s:%(message)s",
-    level=logging.INFO,
-)
+if __name__ == "__main__":
+    links = get_unextracted_links()
 
-logger = logging.getLogger(__name__)
+    for link in links:
+        id, subreddit = link
 
-links = get_unextracted_links()
+        while True:
+            response = extract_data(
+                f"https://www.reddit.com/r/{subreddit}/comments/{id}/.json",
+                logger,
+                "link",
+            )
 
-for link in links:
-    id, subreddit = link
+            if response.status_code != requests.codes.ok:
+                sleep(2, 4)
+                continue
 
-    while True:
-        response = extract_data(
-            f"https://www.reddit.com/r/{subreddit}/comments/{id}/.json",
-            logger,
-            "link",
-        )
+            for comment in response.json()[1]["data"]["children"]:
+                extract_comment(comment)
 
-        if response.status_code != requests.codes.ok:
-            sleep(2, 4)
-            continue
-
-        for comment in response.json()[1]["data"]["children"]:
-            extract_comment(comment)
-
-        sleep(1, 2)
-        break
+            sleep(1, 2)
+            break

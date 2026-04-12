@@ -19,23 +19,23 @@ from granked_data_pipeline.utilities import (
     get_logging_filename,
 )
 
-load_dotenv()
-
 MINIMUM_UPVOTE_RATIO = 0.8
 MINIMUM_SCORE = 24
 MINIMUM_NUM_COMMENTS = 16
 REQUIRED_LANGUAGE = "en"
 
+load_dotenv()
+
+logging.basicConfig(
+    filename=get_logging_filename("ingest_links.log"),
+    format="%(created)s:%(levelname)s:%(name)s:%(message)s",
+    level=logging.INFO,
+)
+
+logger = logging.getLogger(__name__)
+
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        filename=get_logging_filename("ingest_links.log"),
-        format="%(created)s:%(levelname)s:%(name)s:%(message)s",
-        level=logging.INFO,
-    )
-
-    logger = logging.getLogger(__name__)
-
     for query in ["best mechanical keyboard"]:
         while True:
             response = extract_data(
